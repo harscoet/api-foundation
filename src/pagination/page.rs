@@ -22,6 +22,7 @@ impl PageRequest {
     }
 }
 
+#[derive(Debug)]
 pub struct Page<T> {
     pub items: Vec<T>,
     pub next_page_token: Option<String>,

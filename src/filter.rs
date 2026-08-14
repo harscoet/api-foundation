@@ -1,7 +1,7 @@
 mod validate;
 pub mod typed;
 
-pub use aip_160::Comparator;
+pub use aip_160::{Comparator, Value};
 pub use typed::{TypedExpression, TypedFilter, TypedRestriction};
 
 pub trait FilterableField: Sized {
