@@ -4,15 +4,16 @@
 //! Requires: Docker daemon running, libpq installed.
 //!
 //! Shows how little code a developer writes for a complete AIP-compliant List
-//! method: only `ProductField` + the diesel translation. Everything else
-//! (parsing, validation, token encoding, consistency checks) is api-foundation.
+//! method: only `ProductField` + `ProductView` + the diesel translation.
+//! Everything else (parsing, validation, token encoding, consistency checks)
+//! is api-foundation.
 
 use diesel::prelude::*;
 use diesel::pg::PgConnection;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
 use api_foundation::{
-    field::{Field, FieldMask},
+    field::{Field, View},
     filter::{Comparator, TypedExpression, TypedFilter, Value},
     list::ListQuery,
     order_by::{Direction, OrderBy},
@@ -29,8 +30,9 @@ diesel::table! {
     }
 }
 
-// ── Model ─────────────────────────────────────────────────────────────────────
+// ── DB models ─────────────────────────────────────────────────────────────────
 
+// Full row — loaded when view = Full.
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = products)]
 struct Product {
@@ -39,33 +41,28 @@ struct Product {
     price: f64,
 }
 
+// Partial row — loaded when view = Basic. Only id and name are fetched from DB.
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = products)]
+struct ProductBasic {
+    id: i64,
+    name: String,
+}
+
 // ── Response type ─────────────────────────────────────────────────────────────
 //
-// In a real gRPC handler this would be the proto message. Option<T> mirrors
-// proto semantics: a field absent from the read_mask is returned at its zero
-// value (empty string / 0.0). The repository always loads full rows from the
-// DB; masking is a response concern, not a storage concern.
+// In a real gRPC handler this would be the proto message. Option<T> reflects
+// view semantics: a field absent from the view is returned at its zero value
+// (empty string / 0.0 in proto). The view determines what the DB loads.
 
 #[derive(Debug, Clone)]
 struct ProductResponse {
-    id: i64,              // always returned — resource identifier, never masked
+    id: i64,           // always returned — resource identifier
     name: Option<String>,
     price: Option<f64>,
 }
 
-/// Apply a field mask to a fully-loaded DB row.
-fn mask_product(p: Product, mask: &FieldMask<ProductField>) -> ProductResponse {
-    ProductResponse {
-        id: p.id,
-        name: mask.includes(&ProductField::Name).then_some(p.name),
-        price: mask.includes(&ProductField::Price).then_some(p.price),
-    }
-}
-
 // ── ProductField ──────────────────────────────────────────────────────────────
-//
-// This enum is the ONLY API-specific definition the developer writes.
-// api-foundation does the rest: filter parsing, ordering, token management.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProductField {
@@ -100,17 +97,42 @@ impl Field for ProductField {
     }
 }
 
+// ── ProductView (AIP-157) ─────────────────────────────────────────────────────
+//
+// The client selects a view; the server uses it to determine which columns to
+// fetch. Full (default) loads everything. Basic omits price — useful when the
+// caller only needs names and doesn't want to pay for the extra column.
+//
+// Note: ordering by a field requires that field to be present in the view.
+// E.g., `view=Basic, order_by="price"` produces an incomplete cursor.
+// In production, validate this before executing the query.
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum ProductView {
+    #[default]
+    Full,   // proto value 0 — unspecified, returns all fields
+    Basic,  // proto value 1 — id + name only (no price fetched from DB)
+}
+
+impl View for ProductView {
+    fn from_proto(value: i32) -> Self {
+        match value {
+            1 => Self::Basic,
+            _ => Self::Full,
+        }
+    }
+}
+
 // ── Repository ────────────────────────────────────────────────────────────────
 //
-// Translates ListQuery<ProductField> → diesel query → Page<Product>.
+// Translates ListQuery<ProductField> + ProductView → diesel query → Page<ProductResponse>.
 // No filter parsing, no token encoding, no consistency checks — all handled
 // by api-foundation before this function is even called.
 
 type BoxedQuery<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 
 /// Base query: only the filter applied, no cursor / ordering / limit.
-/// Reused for both COUNT(*) and the paginated SELECT to avoid duplicating
-/// the filter logic.
+/// Reused for both COUNT(*) and the paginated SELECT.
 fn base_query(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<BoxedQuery<'_>> {
     let mut q = products::table.into_boxed();
     if let Some(f) = filter {
@@ -122,22 +144,38 @@ fn base_query(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<BoxedQu
 fn list_products(
     conn: &mut PgConnection,
     query: ListQuery<ProductField>,
-) -> QueryResult<Page<Product>> {
-    // 1. COUNT(*) — base query with filter only, no cursor
+    view: ProductView,
+) -> QueryResult<Page<ProductResponse>> {
+    // COUNT(*) — base query with filter only, no cursor
     let total_size: i64 = base_query(query.filter.as_ref())?
         .count()
         .get_result(conn)?;
 
-    // 2. Paginated query — base query + cursor + ordering + limit
+    // Paginated query — base query + cursor + ordering + limit
     let mut q = base_query(query.filter.as_ref())?;
-
     if let Some(ref token) = query.cursor {
         q = apply_cursor(q, token, query.order_by.as_ref());
     }
     q = apply_ordering(q, query.order_by.as_ref());
 
     let limit = (query.page_size + 1) as i64;
-    let mut rows: Vec<Product> = q.limit(limit).load(conn)?;
+
+    // View determines the SQL SELECT — only the requested columns are loaded.
+    let mut rows: Vec<ProductResponse> = match view {
+        ProductView::Basic => q
+            .select(ProductBasic::as_select())
+            .limit(limit)
+            .load::<ProductBasic>(conn)?
+            .into_iter()
+            .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: None })
+            .collect(),
+        ProductView::Full => q
+            .limit(limit)
+            .load::<Product>(conn)?
+            .into_iter()
+            .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: Some(p.price) })
+            .collect(),
+    };
 
     let has_next = rows.len() as u32 > query.page_size;
     if has_next {
@@ -161,7 +199,6 @@ fn apply_filter<'a>(
     expr: &'a TypedExpression<ProductField>,
 ) -> QueryResult<BoxedQuery<'a>> {
     match expr {
-        // Chaining .filter() calls is implicit AND in diesel
         TypedExpression::And(l, r) => apply_filter(apply_filter(q, l)?, r),
         TypedExpression::Restriction(r) => Ok(match (&r.field, &r.comparator, &r.value) {
             (ProductField::Name, Comparator::Equal, Value::String(s)) => {
@@ -185,7 +222,6 @@ fn apply_filter<'a>(
                 ))
             }
         }),
-        // OR/NOT require BoxableExpression — belongs in api-foundation-diesel (future crate)
         _ => Err(diesel::result::Error::QueryBuilderError(
             "OR/NOT not supported in this example".into(),
         )),
@@ -193,7 +229,6 @@ fn apply_filter<'a>(
 }
 
 fn apply_ordering<'a>(q: BoxedQuery<'a>, order_by: Option<&OrderBy<ProductField>>) -> BoxedQuery<'a> {
-    // Tuples give multi-column ORDER BY with id as a stable tiebreaker
     match order_by.and_then(|o| o.clauses.first()) {
         None => q.order(products::id.asc()),
         Some(clause) => match (&clause.field, &clause.direction) {
@@ -213,19 +248,27 @@ fn apply_ordering<'a>(q: BoxedQuery<'a>, order_by: Option<&OrderBy<ProductField>
     }
 }
 
-fn build_cursor(product: &Product, order_by: Option<&OrderBy<ProductField>>) -> Vec<CursorEntry> {
+fn build_cursor(product: &ProductResponse, order_by: Option<&OrderBy<ProductField>>) -> Vec<CursorEntry> {
     let mut cursor = Vec::new();
     if let Some(clause) = order_by.and_then(|ob| ob.clauses.first()) {
-        cursor.push(match clause.field {
-            ProductField::Name => CursorEntry {
-                field_name: "name".to_string(),
-                value: CursorValue::String(product.name.clone()),
-            },
-            ProductField::Price => CursorEntry {
-                field_name: "price".to_string(),
-                value: CursorValue::Float64(product.price),
-            },
-        });
+        match &clause.field {
+            ProductField::Name => {
+                if let Some(ref name) = product.name {
+                    cursor.push(CursorEntry {
+                        field_name: "name".to_string(),
+                        value: CursorValue::String(name.clone()),
+                    });
+                }
+            }
+            ProductField::Price => {
+                if let Some(price) = product.price {
+                    cursor.push(CursorEntry {
+                        field_name: "price".to_string(),
+                        value: CursorValue::Float64(price),
+                    });
+                }
+            }
+        }
     }
     // id is always last — stable tiebreaker regardless of ordering
     cursor.push(CursorEntry {
@@ -263,7 +306,6 @@ fn apply_cursor<'a>(
                         if let CursorValue::Float64(f) = e.value { Some(f) } else { None }
                     })
                     .unwrap_or(f64::MIN);
-                // Keyset formula: (price, id) >/< (cursor_price, cursor_id)
                 match clause.direction {
                     Direction::Asc => q.filter(
                         products::price
@@ -313,16 +355,18 @@ fn apply_cursor<'a>(
 //           req: Request<ListProductsRequest>,
 //       ) -> Result<Response<ListProductsResponse>, Status> {
 //           let req = req.into_inner();
+//           // view parsed from the proto enum integer
+//           let view = ProductView::from_proto(req.view);
 //           let query = ListQuery::<ProductField>::build(
 //               Some(&req.filter), Some(&req.order_by),
 //               req.page_size, Some(&req.page_token),
 //           )?;
-//           let mask = FieldMask::<ProductField>::parse(&req.read_mask)?;
-//           // Repository loads full rows — masking is a response concern, not storage.
-//           let page = self.repo.list(query).await?;
+//           // View is applied at the SQL level — only the selected columns are loaded.
+//           let page = self.repo.list(query, view).await?;
 //           let items = page.items.into_iter().map(|p| ProductProto {
-//               name:  if mask.includes(&ProductField::Name)  { p.name }  else { String::new() },
-//               price: if mask.includes(&ProductField::Price) { p.price } else { 0.0 },
+//               id:    p.id,
+//               name:  p.name.unwrap_or_default(),
+//               price: p.price.unwrap_or_default(),
 //               ..Default::default()
 //           }).collect();
 //           Ok(Response::new(ListProductsResponse { items, ... }))
@@ -335,7 +379,7 @@ fn handle_list_products(
     order_by: &str,
     page_size: i32,
     page_token: &str,
-    read_mask: &str,
+    view: i32,
 ) -> Result<Page<ProductResponse>, api_foundation::error::Error> {
     let query = ListQuery::<ProductField>::build(
         Some(filter),
@@ -343,14 +387,9 @@ fn handle_list_products(
         page_size,
         Some(page_token),
     )?;
-    let mask = FieldMask::<ProductField>::parse(read_mask)?;
-    let page = list_products(conn, query)
-        .map_err(|e| api_foundation::error::Error::InvalidFilter(e.to_string()))?;
-    Ok(Page {
-        items: page.items.into_iter().map(|p| mask_product(p, &mask)).collect(),
-        next_page_token: page.next_page_token,
-        total_size: page.total_size,
-    })
+    let view = ProductView::from_proto(view);
+    list_products(conn, query, view)
+        .map_err(|e| api_foundation::error::Error::InvalidFilter(e.to_string()))
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -397,27 +436,22 @@ async fn pagination_by_id() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    // Page 1 — page_size = 2
-    let p1 = handle_list_products(&mut conn, "", "", 2, "", "").unwrap();
+    let p1 = handle_list_products(&mut conn, "", "", 2, "", 0).unwrap();
     assert_eq!(p1.items.len(), 2);
     assert!(p1.next_page_token.is_some());
 
-    // Page 2
-    let p2 = handle_list_products(&mut conn, "", "", 2, p1.next_page_token.as_deref().unwrap(), "").unwrap();
+    let p2 = handle_list_products(&mut conn, "", "", 2, p1.next_page_token.as_deref().unwrap(), 0).unwrap();
     assert_eq!(p2.items.len(), 2);
     assert!(p2.next_page_token.is_some());
 
-    // Page 3 — last page
-    let p3 = handle_list_products(&mut conn, "", "", 2, p2.next_page_token.as_deref().unwrap(), "").unwrap();
+    let p3 = handle_list_products(&mut conn, "", "", 2, p2.next_page_token.as_deref().unwrap(), 0).unwrap();
     assert_eq!(p3.items.len(), 1);
     assert!(p3.next_page_token.is_none());
 
-    // total_size is stable across pages — always reflects the full filtered collection
     assert_eq!(p1.total_size, Some(5));
     assert_eq!(p2.total_size, Some(5));
     assert_eq!(p3.total_size, Some(5));
 
-    // All 5 products are returned, each exactly once
     let all_ids: Vec<i64> = [p1.items, p2.items, p3.items]
         .concat()
         .into_iter()
@@ -433,7 +467,7 @@ async fn filter_by_price() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    let page = handle_list_products(&mut conn, "price > 25", "", 10, "", "").unwrap();
+    let page = handle_list_products(&mut conn, "price > 25", "", 10, "", 0).unwrap();
     assert_eq!(page.items.len(), 3); // 30, 40, 50
     assert!(page.items.iter().all(|p| p.price.unwrap() > 25.0));
     assert!(page.next_page_token.is_none());
@@ -445,15 +479,14 @@ async fn filter_combined_with_pagination() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    // Only products with price > 10 (Beta, Gamma, Delta, Epsilon = 4 items), page 2 of 2
-    let p1 = handle_list_products(&mut conn, "price > 10", "", 2, "", "").unwrap();
+    let p1 = handle_list_products(&mut conn, "price > 10", "", 2, "", 0).unwrap();
     assert_eq!(p1.items.len(), 2);
     assert_eq!(p1.total_size, Some(4));
     assert!(p1.next_page_token.is_some());
 
-    let p2 = handle_list_products(&mut conn, "price > 10", "", 2, p1.next_page_token.as_deref().unwrap(), "").unwrap();
+    let p2 = handle_list_products(&mut conn, "price > 10", "", 2, p1.next_page_token.as_deref().unwrap(), 0).unwrap();
     assert_eq!(p2.items.len(), 2);
-    assert_eq!(p2.total_size, Some(4)); // same total regardless of which page
+    assert_eq!(p2.total_size, Some(4));
     assert!(p2.next_page_token.is_none());
 }
 
@@ -462,15 +495,15 @@ async fn pagination_with_ordering_desc() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    let p1 = handle_list_products(&mut conn, "", "price desc", 2, "", "").unwrap();
-    assert_eq!(p1.items[0].price, Some(50.0)); // highest first
+    let p1 = handle_list_products(&mut conn, "", "price desc", 2, "", 0).unwrap();
+    assert_eq!(p1.items[0].price, Some(50.0));
     assert_eq!(p1.items[1].price, Some(40.0));
 
-    let p2 = handle_list_products(&mut conn, "", "price desc", 2, p1.next_page_token.as_deref().unwrap(), "").unwrap();
+    let p2 = handle_list_products(&mut conn, "", "price desc", 2, p1.next_page_token.as_deref().unwrap(), 0).unwrap();
     assert_eq!(p2.items[0].price, Some(30.0));
     assert_eq!(p2.items[1].price, Some(20.0));
 
-    let p3 = handle_list_products(&mut conn, "", "price desc", 2, p2.next_page_token.as_deref().unwrap(), "").unwrap();
+    let p3 = handle_list_products(&mut conn, "", "price desc", 2, p2.next_page_token.as_deref().unwrap(), 0).unwrap();
     assert_eq!(p3.items[0].price, Some(10.0));
     assert!(p3.next_page_token.is_none());
 }
@@ -480,23 +513,20 @@ async fn token_mismatch_is_rejected() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    // Get a valid token for filter="price > 10", order_by="price asc"
-    let p1 = handle_list_products(&mut conn, "price > 10", "price asc", 2, "", "").unwrap();
+    let p1 = handle_list_products(&mut conn, "price > 10", "price asc", 2, "", 0).unwrap();
     let token = p1.next_page_token.as_deref().unwrap();
 
-    // Different filter — rejected
-    let err = handle_list_products(&mut conn, "price > 20", "price asc", 2, token, "").unwrap_err();
+    let err = handle_list_products(&mut conn, "price > 20", "price asc", 2, token, 0).unwrap_err();
     assert!(matches!(err, api_foundation::error::Error::PageTokenMismatch));
 
-    // Different order_by — rejected
-    let err = handle_list_products(&mut conn, "price > 10", "price desc", 2, token, "").unwrap_err();
+    let err = handle_list_products(&mut conn, "price > 10", "price desc", 2, token, 0).unwrap_err();
     assert!(matches!(err, api_foundation::error::Error::PageTokenMismatch));
 
     // Same parameters — accepted
-    assert!(handle_list_products(&mut conn, "price > 10", "price asc", 2, token, "").is_ok());
+    assert!(handle_list_products(&mut conn, "price > 10", "price asc", 2, token, 0).is_ok());
 
     // Different page_size — accepted (AIP-158: page_size not part of fingerprint)
-    assert!(handle_list_products(&mut conn, "price > 10", "price asc", 5, token, "").is_ok());
+    assert!(handle_list_products(&mut conn, "price > 10", "price asc", 5, token, 0).is_ok());
 }
 
 #[tokio::test]
@@ -504,7 +534,7 @@ async fn unknown_field_rejected_before_db() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    let err = handle_list_products(&mut conn, r#"secret = "x""#, "", 10, "", "").unwrap_err();
+    let err = handle_list_products(&mut conn, r#"secret = "x""#, "", 10, "", 0).unwrap_err();
     assert!(matches!(
         err,
         api_foundation::error::Error::UnknownField { field } if field == "secret"
@@ -516,8 +546,7 @@ async fn disallowed_comparator_rejected_before_db() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    // name only allows Equal and Has, not GreaterThan
-    let err = handle_list_products(&mut conn, "name > 0", "", 10, "", "").unwrap_err();
+    let err = handle_list_products(&mut conn, "name > 0", "", 10, "", 0).unwrap_err();
     assert!(matches!(
         err,
         api_foundation::error::Error::DisallowedComparator { field, .. } if field == "name"
@@ -525,35 +554,52 @@ async fn disallowed_comparator_rejected_before_db() {
 }
 
 #[tokio::test]
-async fn partial_response_with_field_mask() {
+async fn full_view_loads_all_fields() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    // Request only "name" — price must be absent (None)
-    let page = handle_list_products(&mut conn, "", "", 10, "", "name").unwrap();
+    // view=0 (unspecified) → Full — both name and price are loaded from DB
+    let page = handle_list_products(&mut conn, "", "", 10, "", 0).unwrap();
+    assert!(page.items.iter().all(|p| p.name.is_some() && p.price.is_some()));
+}
+
+#[tokio::test]
+async fn basic_view_loads_only_id_and_name() {
+    let (mut conn, _container) = pg_conn().await;
+    setup(&mut conn);
+
+    // view=1 → Basic — price column is not fetched from the DB
+    let page = handle_list_products(&mut conn, "", "", 10, "", 1).unwrap();
+    assert_eq!(page.items.len(), 5);
     assert!(page.items.iter().all(|p| p.name.is_some()));
     assert!(page.items.iter().all(|p| p.price.is_none()));
-
-    // Request only "price" — name must be absent (None)
-    let page = handle_list_products(&mut conn, "price > 25", "", 10, "", "price").unwrap();
-    assert_eq!(page.items.len(), 3);
-    assert!(page.items.iter().all(|p| p.name.is_none()));
-    assert!(page.items.iter().all(|p| p.price.is_some_and(|v| v > 25.0)));
-
-    // Empty mask — all fields present
-    let page = handle_list_products(&mut conn, "", "", 10, "", "").unwrap();
-    assert!(page.items.iter().all(|p| p.name.is_some() && p.price.is_some()));
-
-    // id is always present regardless of mask
-    let page = handle_list_products(&mut conn, "", "", 10, "", "name").unwrap();
     assert!(page.items.iter().all(|p| p.id > 0));
 }
 
 #[tokio::test]
-async fn invalid_field_mask_rejected() {
+async fn basic_view_with_filter_and_pagination() {
     let (mut conn, _container) = pg_conn().await;
     setup(&mut conn);
 
-    let err = handle_list_products(&mut conn, "", "", 10, "", "name,unknown_field").unwrap_err();
-    assert!(matches!(err, api_foundation::error::Error::InvalidFieldMask(_)));
+    // Filter still applies even in Basic view — but only id and name are returned
+    let p1 = handle_list_products(&mut conn, "price > 10", "", 2, "", 1).unwrap();
+    assert_eq!(p1.items.len(), 2);
+    assert_eq!(p1.total_size, Some(4));
+    assert!(p1.items.iter().all(|p| p.price.is_none()));
+    assert!(p1.next_page_token.is_some());
+
+    // Pagination token works: same view, same filter
+    let p2 = handle_list_products(&mut conn, "price > 10", "", 2, p1.next_page_token.as_deref().unwrap(), 1).unwrap();
+    assert_eq!(p2.items.len(), 2);
+    assert!(p2.next_page_token.is_none());
+
+    // All 4 matching products returned across both pages, each exactly once
+    let all_names: Vec<String> = [p1.items, p2.items]
+        .concat()
+        .into_iter()
+        .map(|p| p.name.unwrap())
+        .collect();
+    assert_eq!(all_names.len(), 4);
+    let unique: std::collections::HashSet<_> = all_names.iter().collect();
+    assert_eq!(unique.len(), 4);
 }

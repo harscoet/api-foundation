@@ -1,11 +1,9 @@
 use aip_160::Comparator;
 
-use crate::error::{Error, Result};
-
 /// Implemented once per resource's field enum.
 ///
-/// Capabilities default to the safe minimum: not filterable, not orderable,
-/// maskable. Override only what the field actually supports.
+/// Capabilities default to the safe minimum: not filterable, not orderable.
+/// Override only what the field actually supports.
 pub trait Field: Sized {
     /// Map a protobuf field string to the typed enum variant.
     /// Return `None` for unknown names — callers surface this as an error.
@@ -21,79 +19,18 @@ pub trait Field: Sized {
     fn is_orderable(&self) -> bool {
         false
     }
-
-    /// Whether this field may appear in a `read_mask` (AIP-157).
-    /// Defaults to `true`; set to `false` for internal-only fields.
-    fn is_maskable(&self) -> bool {
-        true
-    }
 }
 
-/// Parsed and validated AIP-157 field mask.
+/// Named predefined projection for SQL-level field selection (AIP-157 views).
 ///
-/// An empty mask means "all fields" — consistent with AIP-157 which states
-/// that an absent `read_mask` returns the full resource.
+/// Views are coarse-grained subsets defined by the API. The client selects a
+/// view; the server determines which columns to fetch from the data store.
 ///
-/// ```text
-/// // Client sends: read_mask = "name,price"
-/// let mask = FieldMask::<ProductField>::parse("name,price")?;
-/// mask.includes(&ProductField::Price); // true
-/// mask.includes(&ProductField::CreatedAt); // false
-/// ```
-#[derive(Debug, Clone)]
-pub struct FieldMask<F> {
-    // Empty == all fields. Non-empty == explicit allowlist.
-    fields: Vec<F>,
-}
-
-impl<F: Field> FieldMask<F> {
-    /// Parse a comma-separated mask string.
-    ///
-    /// Empty or whitespace-only input is valid and means "all fields".
-    /// Returns an error for unknown field names or non-maskable fields.
-    pub fn parse(input: &str) -> Result<Self> {
-        if input.trim().is_empty() {
-            return Ok(Self { fields: Vec::new() });
-        }
-
-        let fields = input
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|name| {
-                let f = F::from_field_name(name).ok_or_else(|| {
-                    Error::InvalidFieldMask(format!("unknown field: {name}"))
-                })?;
-                if !f.is_maskable() {
-                    return Err(Error::InvalidFieldMask(format!(
-                        "field '{name}' is not maskable"
-                    )));
-                }
-                Ok(f)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Self { fields })
-    }
-
-    /// Returns `true` when the mask is empty (all fields requested).
-    pub fn is_empty(&self) -> bool {
-        self.fields.is_empty()
-    }
-
-    /// The explicitly requested fields. Empty slice means all fields.
-    pub fn fields(&self) -> &[F] {
-        &self.fields
-    }
-}
-
-impl<F: Field + PartialEq> FieldMask<F> {
-    /// Whether `field` should be included in the response.
-    ///
-    /// Always `true` when the mask is empty (all fields requested).
-    pub fn includes(&self, field: &F) -> bool {
-        self.fields.is_empty() || self.fields.contains(field)
-    }
+/// The default view (proto value `0` / unspecified) must return all fields.
+pub trait View: Sized + Default {
+    /// Parse from the protobuf enum integer value.
+    /// `0` (unspecified) must map to `Self::default()`.
+    fn from_proto(value: i32) -> Self;
 }
 
 #[cfg(test)]
@@ -104,7 +41,6 @@ mod tests {
     enum F {
         Name,
         Price,
-        Internal,
     }
 
     impl Field for F {
@@ -112,7 +48,6 @@ mod tests {
             match name {
                 "name" => Some(F::Name),
                 "price" => Some(F::Price),
-                "internal" => Some(F::Internal),
                 _ => None,
             }
         }
@@ -120,55 +55,46 @@ mod tests {
         fn allowed_comparators(&self) -> &[Comparator] {
             &[]
         }
+    }
 
-        fn is_maskable(&self) -> bool {
-            !matches!(self, F::Internal)
+    #[derive(Debug, Default, PartialEq, Eq)]
+    enum V {
+        #[default]
+        Full,
+        Basic,
+    }
+
+    impl View for V {
+        fn from_proto(value: i32) -> Self {
+            match value {
+                1 => V::Basic,
+                _ => V::Full,
+            }
         }
     }
 
     #[test]
-    fn empty_mask_means_all_fields() {
-        let mask = FieldMask::<F>::parse("").unwrap();
-        assert!(mask.is_empty());
-        assert!(mask.includes(&F::Name));
-        assert!(mask.includes(&F::Price));
+    fn view_unspecified_maps_to_default() {
+        assert_eq!(V::from_proto(0), V::Full);
     }
 
     #[test]
-    fn whitespace_mask_means_all_fields() {
-        let mask = FieldMask::<F>::parse("   ").unwrap();
-        assert!(mask.is_empty());
+    fn view_known_value_maps_correctly() {
+        assert_eq!(V::from_proto(1), V::Basic);
     }
 
     #[test]
-    fn valid_fields_are_parsed() {
-        let mask = FieldMask::<F>::parse("name,price").unwrap();
-        assert!(!mask.is_empty());
-        assert_eq!(mask.fields(), &[F::Name, F::Price]);
+    fn view_unknown_value_falls_back_to_default() {
+        assert_eq!(V::from_proto(99), V::Full);
     }
 
     #[test]
-    fn includes_respects_explicit_mask() {
-        let mask = FieldMask::<F>::parse("name").unwrap();
-        assert!(mask.includes(&F::Name));
-        assert!(!mask.includes(&F::Price));
+    fn field_unknown_name_returns_none() {
+        assert!(F::from_field_name("unknown").is_none());
     }
 
     #[test]
-    fn whitespace_around_field_names_is_trimmed() {
-        let mask = FieldMask::<F>::parse(" name , price ").unwrap();
-        assert_eq!(mask.fields(), &[F::Name, F::Price]);
-    }
-
-    #[test]
-    fn unknown_field_is_error() {
-        let err = FieldMask::<F>::parse("name,unknown").unwrap_err();
-        assert!(matches!(err, Error::InvalidFieldMask(msg) if msg.contains("unknown")));
-    }
-
-    #[test]
-    fn non_maskable_field_is_error() {
-        let err = FieldMask::<F>::parse("internal").unwrap_err();
-        assert!(matches!(err, Error::InvalidFieldMask(msg) if msg.contains("internal")));
+    fn field_known_name_returns_variant() {
+        assert_eq!(F::from_field_name("name"), Some(F::Name));
     }
 }

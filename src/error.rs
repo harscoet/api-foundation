@@ -22,9 +22,6 @@ pub enum Error {
 
     #[error("page_token does not match request parameters")]
     PageTokenMismatch,
-
-    #[error("invalid field_mask: {0}")]
-    InvalidFieldMask(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
