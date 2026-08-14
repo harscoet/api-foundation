@@ -13,7 +13,7 @@ use diesel::pg::PgConnection;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
 use api_foundation::{
-    field::{Field, View},
+    field::Field,
     filter::{Comparator, TypedExpression, TypedFilter, Value},
     list::ListQuery,
     order_by::{Direction, OrderBy},
@@ -114,7 +114,7 @@ enum ProductView {
     Basic,  // proto value 1 — id + name only (no price fetched from DB)
 }
 
-impl View for ProductView {
+impl ProductView {
     fn from_proto(value: i32) -> Self {
         match value {
             1 => Self::Basic,

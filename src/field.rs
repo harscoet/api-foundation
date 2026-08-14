@@ -21,18 +21,6 @@ pub trait Field: Sized {
     }
 }
 
-/// Named predefined projection for SQL-level field selection (AIP-157 views).
-///
-/// Views are coarse-grained subsets defined by the API. The client selects a
-/// view; the server determines which columns to fetch from the data store.
-///
-/// The default view (proto value `0` / unspecified) must return all fields.
-pub trait View: Sized + Default {
-    /// Parse from the protobuf enum integer value.
-    /// `0` (unspecified) must map to `Self::default()`.
-    fn from_proto(value: i32) -> Self;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,37 +43,6 @@ mod tests {
         fn allowed_comparators(&self) -> &[Comparator] {
             &[]
         }
-    }
-
-    #[derive(Debug, Default, PartialEq, Eq)]
-    enum V {
-        #[default]
-        Full,
-        Basic,
-    }
-
-    impl View for V {
-        fn from_proto(value: i32) -> Self {
-            match value {
-                1 => V::Basic,
-                _ => V::Full,
-            }
-        }
-    }
-
-    #[test]
-    fn view_unspecified_maps_to_default() {
-        assert_eq!(V::from_proto(0), V::Full);
-    }
-
-    #[test]
-    fn view_known_value_maps_correctly() {
-        assert_eq!(V::from_proto(1), V::Basic);
-    }
-
-    #[test]
-    fn view_unknown_value_falls_back_to_default() {
-        assert_eq!(V::from_proto(99), V::Full);
     }
 
     #[test]
