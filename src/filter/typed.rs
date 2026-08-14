@@ -1,8 +1,11 @@
 use aip_160::{Comparator, Value};
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    field::Field,
+};
 
-use super::{validate, FilterableField};
+use super::validate;
 
 #[derive(Debug)]
 pub struct TypedFilter<F> {
@@ -25,7 +28,7 @@ pub struct TypedRestriction<F> {
     pub value: Value,
 }
 
-impl<F: FilterableField> TypedFilter<F> {
+impl<F: Field> TypedFilter<F> {
     pub fn parse(input: &str) -> Result<Self> {
         let raw = input.to_string();
         let ast = aip_160::parse_filter(input)

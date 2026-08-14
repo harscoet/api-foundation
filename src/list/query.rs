@@ -1,7 +1,8 @@
 use crate::{
     error::Result,
-    filter::{FilterableField, TypedFilter},
-    order_by::{OrderBy, OrderableField},
+    field::Field,
+    filter::TypedFilter,
+    order_by::OrderBy,
     pagination::{PageRequest, PageToken},
 };
 
@@ -14,7 +15,7 @@ pub struct ListQuery<F> {
     fingerprint: u64,
 }
 
-impl<F: FilterableField + OrderableField> ListQuery<F> {
+impl<F: Field> ListQuery<F> {
     pub fn build(
         filter: Option<&str>,
         order_by: Option<&str>,
@@ -89,8 +90,7 @@ mod tests {
 
     use crate::{
         error::Error,
-        filter::FilterableField,
-        order_by::OrderableField,
+        field::Field as FieldTrait,
         pagination::{CursorEntry, CursorValue, PageToken},
     };
 
@@ -102,7 +102,7 @@ mod tests {
         Price,
     }
 
-    impl FilterableField for Field {
+    impl FieldTrait for Field {
         fn from_field_name(name: &str) -> Option<Self> {
             match name {
                 "name" => Some(Field::Name),
@@ -110,6 +110,7 @@ mod tests {
                 _ => None,
             }
         }
+
         fn allowed_comparators(&self) -> &[Comparator] {
             match self {
                 Field::Name => &[Comparator::Equal, Comparator::Has],
@@ -122,15 +123,9 @@ mod tests {
                 ],
             }
         }
-    }
 
-    impl OrderableField for Field {
-        fn from_field_name(name: &str) -> Option<Self> {
-            match name {
-                "name" => Some(Field::Name),
-                "price" => Some(Field::Price),
-                _ => None,
-            }
+        fn is_orderable(&self) -> bool {
+            true
         }
     }
 

@@ -1,18 +1,18 @@
 use aip_160::ast::{Expression, Filter};
 
-use crate::error::{Error, Result};
-
-use super::{
-    typed::{TypedExpression, TypedFilter, TypedRestriction},
-    FilterableField,
+use crate::{
+    error::{Error, Result},
+    field::Field,
 };
 
-pub fn from_ast<F: FilterableField>(filter: Filter, raw: String) -> Result<TypedFilter<F>> {
+use super::typed::{TypedExpression, TypedFilter, TypedRestriction};
+
+pub fn from_ast<F: Field>(filter: Filter, raw: String) -> Result<TypedFilter<F>> {
     let expression = expression(filter.expression)?;
     Ok(TypedFilter { expression, raw })
 }
 
-fn expression<F: FilterableField>(expr: Expression) -> Result<TypedExpression<F>> {
+fn expression<F: Field>(expr: Expression) -> Result<TypedExpression<F>> {
     match expr {
         Expression::And(l, r) => Ok(TypedExpression::And(
             Box::new(expression(*l)?),

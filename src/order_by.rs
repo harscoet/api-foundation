@@ -1,8 +1,4 @@
-use crate::error::{Error, Result};
-
-pub trait OrderableField: Sized {
-    fn from_field_name(name: &str) -> Option<Self>;
-}
+use crate::{error::{Error, Result}, field::Field};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Direction {
@@ -22,7 +18,7 @@ pub struct OrderBy<F> {
     raw: String,
 }
 
-impl<F: OrderableField> OrderBy<F> {
+impl<F: Field> OrderBy<F> {
     pub fn parse(input: &str) -> Result<Self> {
         if input.trim().is_empty() {
             return Err(Error::InvalidOrderBy("empty order_by string".to_string()));
@@ -54,6 +50,12 @@ impl<F: OrderableField> OrderBy<F> {
                 field: field_name.to_string(),
             })?;
 
+            if !field.is_orderable() {
+                return Err(Error::InvalidOrderBy(format!(
+                    "field '{field_name}' is not orderable"
+                )));
+            }
+
             clauses.push(OrderClause { field, direction });
         }
 
@@ -74,83 +76,106 @@ impl<F: OrderableField> OrderBy<F> {
 
 #[cfg(test)]
 mod tests {
+    use aip_160::Comparator;
+
+    use crate::field::Field;
+
     use super::*;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    enum Field {
+    enum F {
         Name,
         Price,
         CreatedAt,
+        Description, // filterable but not orderable — to test the new guard
     }
 
-    impl OrderableField for Field {
+    impl Field for F {
         fn from_field_name(name: &str) -> Option<Self> {
             match name {
-                "name" => Some(Field::Name),
-                "price" => Some(Field::Price),
-                "created_at" => Some(Field::CreatedAt),
+                "name" => Some(F::Name),
+                "price" => Some(F::Price),
+                "created_at" => Some(F::CreatedAt),
+                "description" => Some(F::Description),
                 _ => None,
             }
+        }
+
+        fn allowed_comparators(&self) -> &[Comparator] {
+            match self {
+                F::Description => &[Comparator::Has],
+                _ => &[],
+            }
+        }
+
+        fn is_orderable(&self) -> bool {
+            matches!(self, F::Name | F::Price | F::CreatedAt)
         }
     }
 
     #[test]
     fn single_field_default_asc() {
-        let ob = OrderBy::<Field>::parse("name").unwrap();
+        let ob = OrderBy::<F>::parse("name").unwrap();
         assert_eq!(ob.clauses.len(), 1);
-        assert_eq!(ob.clauses[0].field, Field::Name);
+        assert_eq!(ob.clauses[0].field, F::Name);
         assert_eq!(ob.clauses[0].direction, Direction::Asc);
     }
 
     #[test]
     fn single_field_explicit_asc() {
-        let ob = OrderBy::<Field>::parse("name asc").unwrap();
+        let ob = OrderBy::<F>::parse("name asc").unwrap();
         assert_eq!(ob.clauses[0].direction, Direction::Asc);
     }
 
     #[test]
     fn single_field_desc() {
-        let ob = OrderBy::<Field>::parse("price desc").unwrap();
-        assert_eq!(ob.clauses[0].field, Field::Price);
+        let ob = OrderBy::<F>::parse("price desc").unwrap();
+        assert_eq!(ob.clauses[0].field, F::Price);
         assert_eq!(ob.clauses[0].direction, Direction::Desc);
     }
 
     #[test]
     fn multiple_fields() {
-        let ob = OrderBy::<Field>::parse("name asc, price desc").unwrap();
+        let ob = OrderBy::<F>::parse("name asc, price desc").unwrap();
         assert_eq!(ob.clauses.len(), 2);
-        assert_eq!(ob.clauses[0].field, Field::Name);
+        assert_eq!(ob.clauses[0].field, F::Name);
         assert_eq!(ob.clauses[0].direction, Direction::Asc);
-        assert_eq!(ob.clauses[1].field, Field::Price);
+        assert_eq!(ob.clauses[1].field, F::Price);
         assert_eq!(ob.clauses[1].direction, Direction::Desc);
     }
 
     #[test]
     fn multiple_fields_no_direction() {
-        let ob = OrderBy::<Field>::parse("name, price, created_at").unwrap();
+        let ob = OrderBy::<F>::parse("name, price, created_at").unwrap();
         assert_eq!(ob.clauses.len(), 3);
         assert!(ob.clauses.iter().all(|c| c.direction == Direction::Asc));
     }
 
     #[test]
     fn whitespace_tolerance() {
-        let ob = OrderBy::<Field>::parse("  name  desc  ,  price  asc  ").unwrap();
-        assert_eq!(ob.clauses[0].field, Field::Name);
+        let ob = OrderBy::<F>::parse("  name  desc  ,  price  asc  ").unwrap();
+        assert_eq!(ob.clauses[0].field, F::Name);
         assert_eq!(ob.clauses[0].direction, Direction::Desc);
-        assert_eq!(ob.clauses[1].field, Field::Price);
+        assert_eq!(ob.clauses[1].field, F::Price);
         assert_eq!(ob.clauses[1].direction, Direction::Asc);
     }
 
     #[test]
     fn unknown_field_is_error() {
-        let err = OrderBy::<Field>::parse("unknown desc").unwrap_err();
+        let err = OrderBy::<F>::parse("unknown desc").unwrap_err();
         assert!(matches!(err, Error::UnknownField { field } if field == "unknown"));
+    }
+
+    #[test]
+    fn non_orderable_field_is_error() {
+        let err = OrderBy::<F>::parse("description asc").unwrap_err();
+        assert!(matches!(err, Error::InvalidOrderBy(msg) if msg.contains("not orderable")));
     }
 
     #[test]
     fn empty_string_is_error() {
         assert!(matches!(
-            OrderBy::<Field>::parse("").unwrap_err(),
+            OrderBy::<F>::parse("").unwrap_err(),
             Error::InvalidOrderBy(_)
         ));
     }
@@ -158,7 +183,7 @@ mod tests {
     #[test]
     fn empty_clause_is_error() {
         assert!(matches!(
-            OrderBy::<Field>::parse("name,,price").unwrap_err(),
+            OrderBy::<F>::parse("name,,price").unwrap_err(),
             Error::InvalidOrderBy(_)
         ));
     }
@@ -166,7 +191,7 @@ mod tests {
     #[test]
     fn raw_is_preserved() {
         let input = "name asc, price desc";
-        let ob = OrderBy::<Field>::parse(input).unwrap();
+        let ob = OrderBy::<F>::parse(input).unwrap();
         assert_eq!(ob.raw(), input);
     }
 }

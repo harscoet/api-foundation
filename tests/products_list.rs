@@ -12,9 +12,10 @@ use diesel::pg::PgConnection;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
 use api_foundation::{
-    filter::{Comparator, FilterableField, TypedExpression, TypedFilter, Value},
+    field::Field,
+    filter::{Comparator, TypedExpression, TypedFilter, Value},
     list::ListQuery,
-    order_by::{Direction, OrderBy, OrderableField},
+    order_by::{Direction, OrderBy},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
 };
 
@@ -49,7 +50,7 @@ enum ProductField {
     Price,
 }
 
-impl FilterableField for ProductField {
+impl Field for ProductField {
     fn from_field_name(name: &str) -> Option<Self> {
         match name {
             "name" => Some(Self::Name),
@@ -70,15 +71,9 @@ impl FilterableField for ProductField {
             ],
         }
     }
-}
 
-impl OrderableField for ProductField {
-    fn from_field_name(name: &str) -> Option<Self> {
-        match name {
-            "name" => Some(Self::Name),
-            "price" => Some(Self::Price),
-            _ => None,
-        }
+    fn is_orderable(&self) -> bool {
+        true
     }
 }
 

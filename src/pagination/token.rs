@@ -173,7 +173,7 @@ mod tests {
             vec![
                 CursorEntry { field_name: "s".to_string(), value: CursorValue::String("x".to_string()) },
                 CursorEntry { field_name: "i".to_string(), value: CursorValue::Int64(-99) },
-                CursorEntry { field_name: "f".to_string(), value: CursorValue::Float64(3.14) },
+                CursorEntry { field_name: "f".to_string(), value: CursorValue::Float64(1.5) },
                 CursorEntry { field_name: "b".to_string(), value: CursorValue::Bool(true) },
                 CursorEntry { field_name: "n".to_string(), value: CursorValue::Null },
             ],
@@ -181,7 +181,7 @@ mod tests {
         );
         let decoded = PageToken::decode(&token.encode()).unwrap();
         assert_eq!(decoded.cursor().len(), 5);
-        assert!(matches!(decoded.cursor()[2].value, CursorValue::Float64(f) if (f - 3.14).abs() < f64::EPSILON));
+        assert!(matches!(decoded.cursor()[2].value, CursorValue::Float64(f) if (f - 1.5).abs() < f64::EPSILON));
         assert!(matches!(decoded.cursor()[3].value, CursorValue::Bool(true)));
         assert!(matches!(decoded.cursor()[4].value, CursorValue::Null));
     }
