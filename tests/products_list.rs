@@ -12,7 +12,7 @@ use diesel::pg::PgConnection;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
 use api_foundation::{
-    filter::{Comparator, FilterableField, TypedExpression, Value},
+    filter::{Comparator, FilterableField, TypedExpression, TypedFilter, Value},
     list::ListQuery,
     order_by::{Direction, OrderBy, OrderableField},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
@@ -90,26 +90,34 @@ impl OrderableField for ProductField {
 
 type BoxedQuery<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 
+/// Base query: only the filter applied, no cursor / ordering / limit.
+/// Reused for both COUNT(*) and the paginated SELECT to avoid duplicating
+/// the filter logic.
+fn base_query(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<BoxedQuery<'_>> {
+    let mut q = products::table.into_boxed();
+    if let Some(f) = filter {
+        q = apply_filter(q, &f.expression)?;
+    }
+    Ok(q)
+}
+
 fn list_products(
     conn: &mut PgConnection,
     query: ListQuery<ProductField>,
 ) -> QueryResult<Page<Product>> {
-    let mut q: BoxedQuery = products::table.into_boxed();
+    // 1. COUNT(*) — base query with filter only, no cursor
+    let total_size: i64 = base_query(query.filter.as_ref())?
+        .count()
+        .get_result(conn)?;
 
-    // 1. Filter → diesel WHERE predicates
-    if let Some(ref f) = query.filter {
-        q = apply_filter(q, &f.expression)?;
-    }
+    // 2. Paginated query — base query + cursor + ordering + limit
+    let mut q = base_query(query.filter.as_ref())?;
 
-    // 2. Keyset cursor → WHERE clause continuing from the last page
     if let Some(ref token) = query.cursor {
         q = apply_cursor(q, token, query.order_by.as_ref());
     }
-
-    // 3. ORDER BY — always include id as a stable tiebreaker
     q = apply_ordering(q, query.order_by.as_ref());
 
-    // 4. Fetch page_size + 1 to detect whether a next page exists
     let limit = (query.page_size + 1) as i64;
     let mut rows: Vec<Product> = q.limit(limit).load(conn)?;
 
@@ -123,7 +131,11 @@ fn list_products(
         PageToken::new(build_cursor(last, query.order_by.as_ref()), query.fingerprint()).encode()
     });
 
-    Ok(Page { items: rows, next_page_token, total_size: None })
+    Ok(Page {
+        items: rows,
+        next_page_token,
+        total_size: Some(total_size as u32),
+    })
 }
 
 fn apply_filter<'a>(
@@ -386,6 +398,11 @@ async fn pagination_by_id() {
     assert_eq!(p3.items.len(), 1);
     assert!(p3.next_page_token.is_none());
 
+    // total_size is stable across pages — always reflects the full filtered collection
+    assert_eq!(p1.total_size, Some(5));
+    assert_eq!(p2.total_size, Some(5));
+    assert_eq!(p3.total_size, Some(5));
+
     // All 5 products are returned, each exactly once
     let all_ids: Vec<i64> = [p1.items, p2.items, p3.items]
         .concat()
@@ -406,6 +423,7 @@ async fn filter_by_price() {
     assert_eq!(page.items.len(), 3); // 30, 40, 50
     assert!(page.items.iter().all(|p| p.price > 25.0));
     assert!(page.next_page_token.is_none());
+    assert_eq!(page.total_size, Some(3));
 }
 
 #[tokio::test]
@@ -416,10 +434,12 @@ async fn filter_combined_with_pagination() {
     // Only products with price > 10 (Beta, Gamma, Delta, Epsilon = 4 items), page 2 of 2
     let p1 = handle_list_products(&mut conn, "price > 10", "", 2, "").unwrap();
     assert_eq!(p1.items.len(), 2);
+    assert_eq!(p1.total_size, Some(4));
     assert!(p1.next_page_token.is_some());
 
     let p2 = handle_list_products(&mut conn, "price > 10", "", 2, p1.next_page_token.as_deref().unwrap()).unwrap();
     assert_eq!(p2.items.len(), 2);
+    assert_eq!(p2.total_size, Some(4)); // same total regardless of which page
     assert!(p2.next_page_token.is_none());
 }
 
