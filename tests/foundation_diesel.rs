@@ -9,7 +9,7 @@ use api_foundation::{
     filter::{Comparator, TypedExpression, TypedFilter, Value},
     list::ListQuery,
     order_by::OrderBy,
-    pagination::{CursorEntry, Page, PageToken},
+    pagination::{CursorEntry, CursorValue, Page, PageToken},
 };
 use diesel::pg::PgConnection;
 use diesel::QueryResult;
@@ -47,6 +47,33 @@ pub fn apply_filter<'a, F: DieselField>(
             "OR/NOT not supported — requires BoxableExpression (future api-foundation-diesel)".into(),
         )),
     }
+}
+
+/// Extract an `i64` cursor value by field name. Returns `0` if absent (defensive fallback).
+pub fn cursor_i64(cursor: &[CursorEntry], field_name: &str) -> i64 {
+    cursor
+        .iter()
+        .find(|e| e.field_name == field_name)
+        .and_then(|e| if let CursorValue::Int64(n) = e.value { Some(n) } else { None })
+        .unwrap_or(0)
+}
+
+/// Extract an `f64` cursor value by field name. Returns `f64::MIN` if absent.
+pub fn cursor_f64(cursor: &[CursorEntry], field_name: &str) -> f64 {
+    cursor
+        .iter()
+        .find(|e| e.field_name == field_name)
+        .and_then(|e| if let CursorValue::Float64(f) = e.value { Some(f) } else { None })
+        .unwrap_or(f64::MIN)
+}
+
+/// Extract a `String` cursor value by field name. Returns `""` if absent.
+pub fn cursor_string(cursor: &[CursorEntry], field_name: &str) -> String {
+    cursor
+        .iter()
+        .find(|e| e.field_name == field_name)
+        .and_then(|e| if let CursorValue::String(s) = &e.value { Some(s.clone()) } else { None })
+        .unwrap_or_default()
 }
 
 /// Build a base query with only the filter applied — no cursor, ordering, or limit.

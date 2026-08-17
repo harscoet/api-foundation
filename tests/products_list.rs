@@ -20,6 +20,7 @@ use api_foundation::{
     list::ListQuery,
     order_by::{Direction, OrderBy},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
+
 };
 use foundation_diesel::{DieselField, DieselList};
 
@@ -200,48 +201,23 @@ impl DieselList for Products {
         Self: 'a
     {
         let cursor = token.cursor();
-
-        let cursor_id = cursor
-            .iter()
-            .find(|e| e.field_name == "id")
-            .and_then(|e| if let CursorValue::Int64(n) = e.value { Some(n) } else { None })
-            .unwrap_or(0);
+        let id = foundation_diesel::cursor_i64(cursor, "id");
 
         match order_by.and_then(|ob| ob.clauses.first()) {
-            None => q.filter(products::id.gt(cursor_id)),
+            None => q.filter(products::id.gt(id)),
             Some(clause) => match &clause.field {
                 ProductField::Price => {
-                    let cursor_price = cursor
-                        .iter()
-                        .find(|e| e.field_name == "price")
-                        .and_then(|e| if let CursorValue::Float64(f) = e.value { Some(f) } else { None })
-                        .unwrap_or(f64::MIN);
+                    let v = foundation_diesel::cursor_f64(cursor, "price");
                     match clause.direction {
-                        Direction::Asc => q.filter(
-                            products::price.gt(cursor_price)
-                                .or(products::price.eq(cursor_price).and(products::id.gt(cursor_id))),
-                        ),
-                        Direction::Desc => q.filter(
-                            products::price.lt(cursor_price)
-                                .or(products::price.eq(cursor_price).and(products::id.gt(cursor_id))),
-                        ),
+                        Direction::Asc  => q.filter(products::price.gt(v).or(products::price.eq(v).and(products::id.gt(id)))),
+                        Direction::Desc => q.filter(products::price.lt(v).or(products::price.eq(v).and(products::id.gt(id)))),
                     }
                 }
                 ProductField::Name => {
-                    let cursor_name = cursor
-                        .iter()
-                        .find(|e| e.field_name == "name")
-                        .and_then(|e| if let CursorValue::String(s) = &e.value { Some(s.clone()) } else { None })
-                        .unwrap_or_default();
+                    let v = foundation_diesel::cursor_string(cursor, "name");
                     match clause.direction {
-                        Direction::Asc => q.filter(
-                            products::name.gt(cursor_name.clone())
-                                .or(products::name.eq(cursor_name).and(products::id.gt(cursor_id))),
-                        ),
-                        Direction::Desc => q.filter(
-                            products::name.lt(cursor_name.clone())
-                                .or(products::name.eq(cursor_name).and(products::id.gt(cursor_id))),
-                        ),
+                        Direction::Asc  => q.filter(products::name.gt(v.clone()).or(products::name.eq(v).and(products::id.gt(id)))),
+                        Direction::Desc => q.filter(products::name.lt(v.clone()).or(products::name.eq(v).and(products::id.gt(id)))),
                     }
                 }
             },
