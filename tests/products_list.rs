@@ -194,16 +194,10 @@ impl DieselList for Products {
     }
 
     fn field_cursor_value(field: &ProductField, item: &ProductResponse) -> Option<CursorEntry> {
-        match field {
-            ProductField::Name => item.name.as_ref().map(|s| CursorEntry {
-                field_name: field.to_string(),
-                value: CursorValue::String(s.clone()),
-            }),
-            ProductField::Price => item.price.map(|p| CursorEntry {
-                field_name: field.to_string(),
-                value: CursorValue::Float64(p),
-            }),
-        }
+        diesel_cursor_value!(field,
+            ProductField::Name  => [str] item.name,
+            ProductField::Price => [f64] item.price,
+        )
     }
 
     fn tiebreaker(item: &ProductResponse) -> CursorEntry {

@@ -38,6 +38,39 @@ macro_rules! diesel_filter {
     };
 }
 
+/// Generate the `field_cursor_value` match body for a `DieselList` impl.
+///
+/// Each `FieldVariant => [type] item.field` arm extracts the cursor value for a sort field.
+/// Supported types: `str` (Option<String>, uses as_ref + clone), `f64` (Option<f64>, Copy).
+///
+/// Note: `@map` expands to an expression (the arm body), not a match arm — valid unlike `@arm`.
+/// `item` is not a macro parameter; the accessor expression (`item.name`) closes over it directly.
+#[allow(unused_macros)]
+macro_rules! diesel_cursor_value {
+    (
+        $field:expr,
+        $($variant:pat => [$ty:ident] $accessor:expr),+ $(,)?
+    ) => {
+        match $field {
+            $(
+                $variant => diesel_cursor_value!(@map $field, $accessor, $ty),
+            )+
+        }
+    };
+    (@map $field:expr, $accessor:expr, str) => {
+        $accessor.as_ref().map(|v| api_foundation::pagination::CursorEntry {
+            field_name: $field.to_string(),
+            value: api_foundation::pagination::CursorValue::String(v.clone()),
+        })
+    };
+    (@map $field:expr, $accessor:expr, f64) => {
+        $accessor.map(|v| api_foundation::pagination::CursorEntry {
+            field_name: $field.to_string(),
+            value: api_foundation::pagination::CursorValue::Float64(v),
+        })
+    };
+}
+
 /// Generate the `apply_field_cursor` keyset WHERE clause for a diesel `BoxedQuery`.
 ///
 /// Each `FieldVariant => column [type]` pair expands to a keyset filter for both
