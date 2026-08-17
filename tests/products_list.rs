@@ -67,7 +67,8 @@ struct ProductResponse {
 
 // ── ProductField ──────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, strum::Display, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 enum ProductField {
     Name,
     Price,
@@ -75,11 +76,7 @@ enum ProductField {
 
 impl Field for ProductField {
     fn from_field_name(name: &str) -> Option<Self> {
-        match name {
-            "name" => Some(Self::Name),
-            "price" => Some(Self::Price),
-            _ => None,
-        }
+        name.parse().ok()
     }
 
     fn allowed_comparators(&self) -> &[Comparator] {
@@ -201,16 +198,17 @@ impl DieselList for Products {
     fn apply_field_cursor<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction, cursor: &[CursorEntry]) -> Self::Query<'a>
     {
         let id = foundation_diesel::cursor_i64(cursor, "id");
+        let name: &'static str = field.into();
         match field {
             ProductField::Price => {
-                let v = foundation_diesel::cursor_f64(cursor, "price");
+                let v = foundation_diesel::cursor_f64(cursor, name);
                 match direction {
                     Direction::Asc  => q.filter(products::price.gt(v).or(products::price.eq(v).and(products::id.gt(id)))),
                     Direction::Desc => q.filter(products::price.lt(v).or(products::price.eq(v).and(products::id.gt(id)))),
                 }
             }
             ProductField::Name => {
-                let v = foundation_diesel::cursor_string(cursor, "name");
+                let v = foundation_diesel::cursor_string(cursor, name);
                 match direction {
                     Direction::Asc  => q.filter(products::name.gt(v.clone()).or(products::name.eq(v).and(products::id.gt(id)))),
                     Direction::Desc => q.filter(products::name.lt(v.clone()).or(products::name.eq(v).and(products::id.gt(id)))),
@@ -240,11 +238,11 @@ impl DieselList for Products {
     fn field_cursor_value(field: &ProductField, item: &ProductResponse) -> Option<CursorEntry> {
         match field {
             ProductField::Name => item.name.as_ref().map(|s| CursorEntry {
-                field_name: "name".to_string(),
+                field_name: field.to_string(),
                 value: CursorValue::String(s.clone()),
             }),
             ProductField::Price => item.price.map(|p| CursorEntry {
-                field_name: "price".to_string(),
+                field_name: field.to_string(),
                 value: CursorValue::Float64(p),
             }),
         }

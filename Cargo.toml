@@ -11,5 +11,6 @@ thiserror = "2.0"
 
 [dev-dependencies]
 diesel = { version = "2.2", features = ["postgres"] }
+strum = { version = "0.27", features = ["derive"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 tokio = { version = "1", features = ["full"] }
