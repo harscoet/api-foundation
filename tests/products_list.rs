@@ -176,8 +176,8 @@ impl DieselList for Products {
         foundation_diesel::base_query(products::table.into_boxed(), filter)
     }
 
-    fn count(filter: Option<&TypedFilter<ProductField>>, conn: &mut PgConnection) -> QueryResult<i64> {
-        Self::base_query(filter)?.count().get_result(conn)
+    fn count(filter: Option<&TypedFilter<ProductField>>, conn: &mut PgConnection) -> QueryResult<Option<i64>> {
+        Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))
     }
 
     fn apply_ordering<'a, 'b>(q: Self::Query<'a>, order_by: Option<&'b OrderBy<ProductField>>) -> Self::Query<'a>

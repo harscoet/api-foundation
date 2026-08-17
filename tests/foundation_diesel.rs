@@ -81,12 +81,14 @@ pub trait DieselList {
         filter: Option<&'a TypedFilter<Self::Field>>,
     ) -> QueryResult<Self::Query<'a>>;
 
-    /// COUNT(*) with filter only.
-    /// Typically: `Self::base_query(filter)?.count().get_result(conn)`
+    /// Total count with filter only. Return `None` to skip the COUNT query entirely.
+    /// Default: `Ok(None)`. Override with `Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))`.
     fn count(
-        filter: Option<&TypedFilter<Self::Field>>,
-        conn: &mut PgConnection,
-    ) -> QueryResult<i64>;
+        _filter: Option<&TypedFilter<Self::Field>>,
+        _conn: &mut PgConnection,
+    ) -> QueryResult<Option<i64>> {
+        Ok(None)
+    }
 
     /// Apply ORDER BY clauses — field → column mapping.
     fn apply_ordering<'a, 'b>(
@@ -154,5 +156,5 @@ pub fn diesel_list<L: DieselList>(
         .encode()
     });
 
-    Ok(Page { items, next_page_token, total_size: Some(total_size as u32) })
+    Ok(Page { items, next_page_token, total_size })
 }

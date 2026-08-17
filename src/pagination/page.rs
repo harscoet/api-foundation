@@ -26,7 +26,7 @@ impl PageRequest {
 pub struct Page<T> {
     pub items: Vec<T>,
     pub next_page_token: Option<String>,
-    pub total_size: Option<u32>,
+    pub total_size: Option<i64>,
 }
 
 #[cfg(test)]
