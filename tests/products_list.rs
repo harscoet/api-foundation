@@ -13,6 +13,8 @@ use diesel::pg::PgConnection;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
 mod foundation_diesel;
+#[macro_use]
+mod foundation_diesel_macros;
 
 use api_foundation::{
     field::Field,
@@ -177,14 +179,12 @@ impl DieselList for Products {
         q.order(products::id.asc())
     }
 
-    fn apply_field_ordering<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction) -> Self::Query<'a>
-    {
-        match (field, direction) {
-            (ProductField::Name,  Direction::Asc)  => q.order((products::name.asc(),  products::id.asc())),
-            (ProductField::Name,  Direction::Desc) => q.order((products::name.desc(), products::id.asc())),
-            (ProductField::Price, Direction::Asc)  => q.order((products::price.asc(),  products::id.asc())),
-            (ProductField::Price, Direction::Desc) => q.order((products::price.desc(), products::id.asc())),
-        }
+    fn apply_field_ordering<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction) -> Self::Query<'a> {
+        diesel_order_by!(q, field, direction,
+            tiebreaker: products::id,
+            ProductField::Name  => products::name,
+            ProductField::Price => products::price,
+        )
     }
 
     fn apply_tiebreaker_cursor<'a>(q: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a> {
