@@ -200,21 +200,10 @@ impl DieselList for Products {
     }
 
     fn load<'a>(q: Self::Query<'a>, view: &ProductView, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<ProductResponse>> {
-        Ok(match view {
-            ProductView::Basic => q
-                .select(ProductBasic::as_select())
-                .limit(limit)
-                .load::<ProductBasic>(conn)?
-                .into_iter()
-                .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: None })
-                .collect(),
-            ProductView::Full => q
-                .limit(limit)
-                .load::<Product>(conn)?
-                .into_iter()
-                .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: Some(p.price) })
-                .collect(),
-        })
+        diesel_load!(q, view, limit, conn,
+            ProductView::Basic => ProductBasic => |p| ProductResponse { id: p.id, name: Some(p.name), price: None },
+            ProductView::Full  => Product      => |p| ProductResponse { id: p.id, name: Some(p.name), price: Some(p.price) },
+        )
     }
 
     fn field_cursor_value(field: &ProductField, item: &ProductResponse) -> Option<CursorEntry> {

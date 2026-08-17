@@ -60,6 +60,33 @@ macro_rules! diesel_cursor_filter {
     };
 }
 
+/// Generate the `load` body for a view-dispatched diesel SELECT.
+///
+/// Each `ViewVariant => Model => |row| mapping` arm expands to:
+/// `q.select(Model::as_select()).limit(limit).load::<Model>(conn)?.into_iter().map(|row| mapping).collect()`
+///
+/// Note: `.select(Model::as_select())` is always emitted — for a full model this is
+/// equivalent to no explicit select (all columns), so both views use the same pattern.
+#[allow(unused_macros)]
+macro_rules! diesel_load {
+    (
+        $q:expr, $view:expr, $limit:expr, $conn:expr,
+        $($variant:pat => $model:ty => |$row:ident| $map:expr),+ $(,)?
+    ) => {
+        Ok(match $view {
+            $(
+                $variant => $q
+                    .select(<$model>::as_select())
+                    .limit($limit)
+                    .load::<$model>($conn)?
+                    .into_iter()
+                    .map(|$row| $map)
+                    .collect(),
+            )+
+        })
+    };
+}
+
 #[allow(unused_macros)]
 macro_rules! diesel_order_by {
     (
