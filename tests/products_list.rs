@@ -266,25 +266,21 @@ impl DieselList for Products {
         })
     }
 
-    fn build_cursor(item: &ProductResponse, order_by: Option<&OrderBy<ProductField>>) -> Vec<CursorEntry> {
-        let mut cursor = Vec::new();
-        if let Some(clause) = order_by.and_then(|ob| ob.clauses.first()) {
-            match &clause.field {
-                ProductField::Name => {
-                    if let Some(ref name) = item.name {
-                        cursor.push(CursorEntry { field_name: "name".to_string(), value: CursorValue::String(name.clone()) });
-                    }
-                }
-                ProductField::Price => {
-                    if let Some(price) = item.price {
-                        cursor.push(CursorEntry { field_name: "price".to_string(), value: CursorValue::Float64(price) });
-                    }
-                }
-            }
+    fn field_cursor_value(field: &ProductField, item: &ProductResponse) -> Option<CursorEntry> {
+        match field {
+            ProductField::Name => item.name.as_ref().map(|s| CursorEntry {
+                field_name: "name".to_string(),
+                value: CursorValue::String(s.clone()),
+            }),
+            ProductField::Price => item.price.map(|p| CursorEntry {
+                field_name: "price".to_string(),
+                value: CursorValue::Float64(p),
+            }),
         }
-        // id is always last — stable tiebreaker regardless of ordering
-        cursor.push(CursorEntry { field_name: "id".to_string(), value: CursorValue::Int64(item.id) });
-        cursor
+    }
+
+    fn tiebreaker(item: &ProductResponse) -> CursorEntry {
+        CursorEntry { field_name: "id".to_string(), value: CursorValue::Int64(item.id) }
     }
 }
 

@@ -116,11 +116,23 @@ pub trait DieselList {
         conn: &mut PgConnection,
     ) -> QueryResult<Vec<Self::Response>>;
 
+    /// Extract the cursor entry for a given sort field from a response item.
+    /// Return `None` if the field value is absent (e.g. not loaded by this view).
+    fn field_cursor_value(field: &Self::Field, item: &Self::Response) -> Option<CursorEntry>;
+
+    /// Stable tiebreaker appended after all sort fields — typically the primary key.
+    fn tiebreaker(item: &Self::Response) -> CursorEntry;
+
     /// Build a keyset cursor from the last item in a page.
-    fn build_cursor(
-        item: &Self::Response,
-        order_by: Option<&OrderBy<Self::Field>>,
-    ) -> Vec<CursorEntry>;
+    fn build_cursor(item: &Self::Response, order_by: Option<&OrderBy<Self::Field>>) -> Vec<CursorEntry> {
+        let mut cursor: Vec<CursorEntry> = order_by
+            .iter()
+            .flat_map(|ob| &ob.clauses)
+            .filter_map(|clause| Self::field_cursor_value(&clause.field, item))
+            .collect();
+        cursor.push(Self::tiebreaker(item));
+        cursor
+    }
 }
 
 /// Generic AIP-158 pagination loop for any [`DieselList`] implementation.
