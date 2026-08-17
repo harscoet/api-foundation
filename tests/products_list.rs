@@ -12,13 +12,16 @@ use diesel::prelude::*;
 use diesel::pg::PgConnection;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
+mod foundation_diesel;
+
 use api_foundation::{
     field::Field,
-    filter::{Comparator, TypedExpression, TypedFilter, Value},
+    filter::{Comparator, TypedFilter, Value},
     list::ListQuery,
     order_by::{Direction, OrderBy},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
 };
+use foundation_diesel::DieselField;
 
 // ── Diesel schema ─────────────────────────────────────────────────────────────
 
@@ -97,6 +100,38 @@ impl Field for ProductField {
     }
 }
 
+impl DieselField for ProductField {
+    type Query<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
+
+    fn apply_restriction<'a>(
+        query: Self::Query<'a>,
+        field: &Self,
+        comparator: &Comparator,
+        value: &'a Value,
+    ) -> diesel::QueryResult<Self::Query<'a>> {
+        Ok(match (field, comparator, value) {
+            (Self::Name, Comparator::Equal, Value::String(s)) => {
+                query.filter(products::name.eq(s.clone()))
+            }
+            (Self::Price, Comparator::GreaterThan, Value::Number(n)) => {
+                query.filter(products::price.gt(n))
+            }
+            (Self::Price, Comparator::GreaterThanOrEqual, Value::Number(n)) => {
+                query.filter(products::price.ge(n))
+            }
+            (Self::Price, Comparator::LessThan, Value::Number(n)) => {
+                query.filter(products::price.lt(n))
+            }
+            (Self::Price, Comparator::LessThanOrEqual, Value::Number(n)) => {
+                query.filter(products::price.le(n))
+            }
+            _ => return Err(diesel::result::Error::QueryBuilderError(
+                "unsupported filter combination".into(),
+            )),
+        })
+    }
+}
+
 // ── ProductView (AIP-157) ─────────────────────────────────────────────────────
 //
 // The client selects a view; the server uses it to determine which columns to
@@ -134,11 +169,7 @@ type BoxedQuery<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 /// Base query: only the filter applied, no cursor / ordering / limit.
 /// Reused for both COUNT(*) and the paginated SELECT.
 fn base_query(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<BoxedQuery<'_>> {
-    let mut q = products::table.into_boxed();
-    if let Some(f) = filter {
-        q = apply_filter(q, &f.expression)?;
-    }
-    Ok(q)
+    foundation_diesel::base_query(products::table.into_boxed(), filter)
 }
 
 fn list_products(
@@ -192,40 +223,6 @@ fn list_products(
         next_page_token,
         total_size: Some(total_size as u32),
     })
-}
-
-fn apply_filter<'a>(
-    q: BoxedQuery<'a>,
-    expr: &'a TypedExpression<ProductField>,
-) -> QueryResult<BoxedQuery<'a>> {
-    match expr {
-        TypedExpression::And(l, r) => apply_filter(apply_filter(q, l)?, r),
-        TypedExpression::Restriction(r) => Ok(match (&r.field, &r.comparator, &r.value) {
-            (ProductField::Name, Comparator::Equal, Value::String(s)) => {
-                q.filter(products::name.eq(s.clone()))
-            }
-            (ProductField::Price, Comparator::GreaterThan, Value::Number(n)) => {
-                q.filter(products::price.gt(n))
-            }
-            (ProductField::Price, Comparator::GreaterThanOrEqual, Value::Number(n)) => {
-                q.filter(products::price.ge(n))
-            }
-            (ProductField::Price, Comparator::LessThan, Value::Number(n)) => {
-                q.filter(products::price.lt(n))
-            }
-            (ProductField::Price, Comparator::LessThanOrEqual, Value::Number(n)) => {
-                q.filter(products::price.le(n))
-            }
-            _ => {
-                return Err(diesel::result::Error::QueryBuilderError(
-                    "unsupported filter combination".into(),
-                ))
-            }
-        }),
-        _ => Err(diesel::result::Error::QueryBuilderError(
-            "OR/NOT not supported in this example".into(),
-        )),
-    }
 }
 
 fn apply_ordering<'a>(q: BoxedQuery<'a>, order_by: Option<&OrderBy<ProductField>>) -> BoxedQuery<'a> {
