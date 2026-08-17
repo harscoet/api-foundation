@@ -191,26 +191,12 @@ impl DieselList for Products {
         q.filter(products::id.gt(foundation_diesel::cursor_i64(cursor, "id")))
     }
 
-    fn apply_field_cursor<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction, cursor: &[CursorEntry]) -> Self::Query<'a>
-    {
-        let id = foundation_diesel::cursor_i64(cursor, "id");
-        let name: &'static str = field.into();
-        match field {
-            ProductField::Price => {
-                let v = foundation_diesel::cursor_f64(cursor, name);
-                match direction {
-                    Direction::Asc  => q.filter(products::price.gt(v).or(products::price.eq(v).and(products::id.gt(id)))),
-                    Direction::Desc => q.filter(products::price.lt(v).or(products::price.eq(v).and(products::id.gt(id)))),
-                }
-            }
-            ProductField::Name => {
-                let v = foundation_diesel::cursor_string(cursor, name);
-                match direction {
-                    Direction::Asc  => q.filter(products::name.gt(v.clone()).or(products::name.eq(v).and(products::id.gt(id)))),
-                    Direction::Desc => q.filter(products::name.lt(v.clone()).or(products::name.eq(v).and(products::id.gt(id)))),
-                }
-            }
-        }
+    fn apply_field_cursor<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction, cursor: &[CursorEntry]) -> Self::Query<'a> {
+        diesel_cursor_filter!(q, field, direction, cursor,
+            tiebreaker: products::id,
+            ProductField::Price => products::price [f64],
+            ProductField::Name  => products::name  [str],
+        )
     }
 
     fn load<'a>(q: Self::Query<'a>, view: &ProductView, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<ProductResponse>> {
