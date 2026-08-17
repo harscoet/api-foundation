@@ -104,26 +104,13 @@ impl DieselField for ProductField {
         comparator: &Comparator,
         value: &'a Value,
     ) -> diesel::QueryResult<Self::Query<'a>> {
-        Ok(match (field, comparator, value) {
-            (Self::Name, Comparator::Equal, Value::String(s)) => {
-                query.filter(products::name.eq(s.clone()))
-            }
-            (Self::Price, Comparator::GreaterThan, Value::Number(n)) => {
-                query.filter(products::price.gt(n))
-            }
-            (Self::Price, Comparator::GreaterThanOrEqual, Value::Number(n)) => {
-                query.filter(products::price.ge(n))
-            }
-            (Self::Price, Comparator::LessThan, Value::Number(n)) => {
-                query.filter(products::price.lt(n))
-            }
-            (Self::Price, Comparator::LessThanOrEqual, Value::Number(n)) => {
-                query.filter(products::price.le(n))
-            }
-            _ => return Err(diesel::result::Error::QueryBuilderError(
-                "unsupported filter combination".into(),
-            )),
-        })
+        diesel_filter!(query, field, comparator, value,
+            (Self::Name,  Comparator::Equal,              Value::String(s)) => products::name.eq(s.clone()),
+            (Self::Price, Comparator::GreaterThan,        Value::Number(n)) => products::price.gt(n),
+            (Self::Price, Comparator::GreaterThanOrEqual, Value::Number(n)) => products::price.ge(n),
+            (Self::Price, Comparator::LessThan,           Value::Number(n)) => products::price.lt(n),
+            (Self::Price, Comparator::LessThanOrEqual,    Value::Number(n)) => products::price.le(n),
+        )
     }
 }
 

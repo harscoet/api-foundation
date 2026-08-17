@@ -13,6 +13,31 @@
 ///     )
 /// }
 /// ```
+/// Generate the `apply_restriction` match body for a diesel `DieselField` impl.
+///
+/// Wraps the arms with `Ok(match (...) { ... })`, adds `query.filter(...)` around each
+/// expression, and emits the fallback `_ => Err(QueryBuilderError)` automatically.
+///
+/// Note: a more compact `[num: gt, ge, ...]` DSL was attempted but Rust does not allow
+/// macros to expand to match arms — `macros cannot expand to match arms` (stable limit).
+/// The explicit arm form is the best achievable with `macro_rules!`.
+#[allow(unused_macros)]
+macro_rules! diesel_filter {
+    (
+        $query:expr, $field:expr, $comparator:expr, $value:expr,
+        $(($f:pat, $c:pat, $v:pat) => $expr:expr),+ $(,)?
+    ) => {
+        Ok(match ($field, $comparator, $value) {
+            $(
+                ($f, $c, $v) => $query.filter($expr),
+            )+
+            _ => return Err(diesel::result::Error::QueryBuilderError(
+                "unsupported filter combination".into(),
+            )),
+        })
+    };
+}
+
 /// Generate the `apply_field_cursor` keyset WHERE clause for a diesel `BoxedQuery`.
 ///
 /// Each `FieldVariant => column [type]` pair expands to a keyset filter for both
