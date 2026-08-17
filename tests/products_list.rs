@@ -180,16 +180,11 @@ impl DieselList for Products {
         Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))
     }
 
-    fn apply_tiebreaker_ordering<'a>(q: Self::Query<'a>) -> Self::Query<'a>
-    where
-        Self: 'a
-    {
+    fn apply_tiebreaker_ordering<'a>(q: Self::Query<'a>) -> Self::Query<'a> {
         q.order(products::id.asc())
     }
 
     fn apply_field_ordering<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction) -> Self::Query<'a>
-    where
-        Self: 'a
     {
         match (field, direction) {
             (ProductField::Name,  Direction::Asc)  => q.order((products::name.asc(),  products::id.asc())),
@@ -199,16 +194,11 @@ impl DieselList for Products {
         }
     }
 
-    fn apply_tiebreaker_cursor<'a>(q: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a>
-    where
-        Self: 'a
-    {
+    fn apply_tiebreaker_cursor<'a>(q: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a> {
         q.filter(products::id.gt(foundation_diesel::cursor_i64(cursor, "id")))
     }
 
     fn apply_field_cursor<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction, cursor: &[CursorEntry]) -> Self::Query<'a>
-    where
-        Self: 'a
     {
         let id = foundation_diesel::cursor_i64(cursor, "id");
         match field {

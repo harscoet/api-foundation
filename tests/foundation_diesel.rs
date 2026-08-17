@@ -118,18 +118,14 @@ pub trait DieselList {
     }
 
     /// Default ordering when no `order_by` is specified — typically the primary key.
-    fn apply_tiebreaker_ordering<'a>(query: Self::Query<'a>) -> Self::Query<'a>
-    where
-        Self: 'a;
+    fn apply_tiebreaker_ordering<'a>(query: Self::Query<'a>) -> Self::Query<'a>;
 
     /// Apply ordering for a specific sort field + direction (tiebreaker included).
     fn apply_field_ordering<'a>(
         query: Self::Query<'a>,
         field: &Self::Field,
         direction: &Direction,
-    ) -> Self::Query<'a>
-    where
-        Self: 'a;
+    ) -> Self::Query<'a>;
 
     /// Apply ORDER BY — dispatches to [`apply_tiebreaker_ordering`] or [`apply_field_ordering`].
     fn apply_ordering<'a, 'b>(
@@ -146,9 +142,7 @@ pub trait DieselList {
     }
 
     /// Keyset filter when there is no explicit ordering — typically `tiebreaker_col > cursor_id`.
-    fn apply_tiebreaker_cursor<'a>(query: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a>
-    where
-        Self: 'a;
+    fn apply_tiebreaker_cursor<'a>(query: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a>;
 
     /// Keyset filter for a specific sort field + direction + tiebreaker.
     fn apply_field_cursor<'a>(
@@ -156,9 +150,7 @@ pub trait DieselList {
         field: &Self::Field,
         direction: &Direction,
         cursor: &[CursorEntry],
-    ) -> Self::Query<'a>
-    where
-        Self: 'a;
+    ) -> Self::Query<'a>;
 
     /// Apply the full keyset cursor — dispatches to [`apply_tiebreaker_cursor`] or
     /// [`apply_field_cursor`] based on whether ordering is active.
