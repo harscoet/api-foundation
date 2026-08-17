@@ -18,7 +18,7 @@ use api_foundation::{
     field::Field,
     filter::{Comparator, TypedFilter, Value},
     list::ListQuery,
-    order_by::{Direction, OrderBy},
+    order_by::Direction,
     pagination::{CursorEntry, CursorValue, Page},
 };
 use foundation_diesel::{DieselField, DieselList};
@@ -180,18 +180,22 @@ impl DieselList for Products {
         Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))
     }
 
-    fn apply_ordering<'a, 'b>(q: Self::Query<'a>, order_by: Option<&'b OrderBy<ProductField>>) -> Self::Query<'a>
+    fn apply_tiebreaker_ordering<'a>(q: Self::Query<'a>) -> Self::Query<'a>
     where
         Self: 'a
     {
-        match order_by.and_then(|o| o.clauses.first()) {
-            None => q.order(products::id.asc()),
-            Some(clause) => match (&clause.field, &clause.direction) {
-                (ProductField::Name, Direction::Asc)  => q.order((products::name.asc(),  products::id.asc())),
-                (ProductField::Name, Direction::Desc) => q.order((products::name.desc(), products::id.asc())),
-                (ProductField::Price, Direction::Asc)  => q.order((products::price.asc(),  products::id.asc())),
-                (ProductField::Price, Direction::Desc) => q.order((products::price.desc(), products::id.asc())),
-            },
+        q.order(products::id.asc())
+    }
+
+    fn apply_field_ordering<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction) -> Self::Query<'a>
+    where
+        Self: 'a
+    {
+        match (field, direction) {
+            (ProductField::Name,  Direction::Asc)  => q.order((products::name.asc(),  products::id.asc())),
+            (ProductField::Name,  Direction::Desc) => q.order((products::name.desc(), products::id.asc())),
+            (ProductField::Price, Direction::Asc)  => q.order((products::price.asc(),  products::id.asc())),
+            (ProductField::Price, Direction::Desc) => q.order((products::price.desc(), products::id.asc())),
         }
     }
 

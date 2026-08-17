@@ -117,13 +117,33 @@ pub trait DieselList {
         Ok(None)
     }
 
-    /// Apply ORDER BY clauses — field → column mapping.
+    /// Default ordering when no `order_by` is specified — typically the primary key.
+    fn apply_tiebreaker_ordering<'a>(query: Self::Query<'a>) -> Self::Query<'a>
+    where
+        Self: 'a;
+
+    /// Apply ordering for a specific sort field + direction (tiebreaker included).
+    fn apply_field_ordering<'a>(
+        query: Self::Query<'a>,
+        field: &Self::Field,
+        direction: &Direction,
+    ) -> Self::Query<'a>
+    where
+        Self: 'a;
+
+    /// Apply ORDER BY — dispatches to [`apply_tiebreaker_ordering`] or [`apply_field_ordering`].
     fn apply_ordering<'a, 'b>(
         query: Self::Query<'a>,
         order_by: Option<&'b OrderBy<Self::Field>>,
     ) -> Self::Query<'a>
     where
-        Self: 'a;
+        Self: 'a,
+    {
+        match order_by.and_then(|o| o.clauses.first()) {
+            None => Self::apply_tiebreaker_ordering(query),
+            Some(clause) => Self::apply_field_ordering(query, &clause.field, &clause.direction),
+        }
+    }
 
     /// Keyset filter when there is no explicit ordering — typically `tiebreaker_col > cursor_id`.
     fn apply_tiebreaker_cursor<'a>(query: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a>
