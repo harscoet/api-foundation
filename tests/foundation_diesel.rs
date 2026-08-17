@@ -8,7 +8,7 @@ use api_foundation::{
     field::Field,
     filter::{Comparator, TypedExpression, TypedFilter, Value},
     list::ListQuery,
-    order_by::OrderBy,
+    order_by::{Direction, OrderBy},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
 };
 use diesel::pg::PgConnection;
@@ -125,14 +125,37 @@ pub trait DieselList {
     where
         Self: 'a;
 
-    /// Apply keyset cursor as WHERE clause — field → column mapping.
+    /// Keyset filter when there is no explicit ordering — typically `tiebreaker_col > cursor_id`.
+    fn apply_tiebreaker_cursor<'a>(query: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a>
+    where
+        Self: 'a;
+
+    /// Keyset filter for a specific sort field + direction + tiebreaker.
+    fn apply_field_cursor<'a>(
+        query: Self::Query<'a>,
+        field: &Self::Field,
+        direction: &Direction,
+        cursor: &[CursorEntry],
+    ) -> Self::Query<'a>
+    where
+        Self: 'a;
+
+    /// Apply the full keyset cursor — dispatches to [`apply_tiebreaker_cursor`] or
+    /// [`apply_field_cursor`] based on whether ordering is active.
     fn apply_cursor<'a, 'b>(
         query: Self::Query<'a>,
         token: &'b PageToken,
         order_by: Option<&'b OrderBy<Self::Field>>,
     ) -> Self::Query<'a>
     where
-        Self: 'a;
+        Self: 'a,
+    {
+        let cursor = token.cursor();
+        match order_by.and_then(|ob| ob.clauses.first()) {
+            None => Self::apply_tiebreaker_cursor(query, cursor),
+            Some(clause) => Self::apply_field_cursor(query, &clause.field, &clause.direction, cursor),
+        }
+    }
 
     /// Execute the view-specific SELECT and map rows to `Response`.
     /// This is the only method that varies meaningfully between views.
