@@ -46,7 +46,7 @@ impl<F: Field> OrderBy<F> {
                 (part, Direction::Asc)
             };
 
-            let field = F::from_field_name(field_name).ok_or_else(|| Error::UnknownField {
+            let field = field_name.parse::<F>().ok().ok_or_else(|| Error::UnknownField {
                 field: field_name.to_string(),
             })?;
 
@@ -90,16 +90,20 @@ mod tests {
         Description, // filterable but not orderable — to test the new guard
     }
 
-    impl Field for F {
-        fn from_field_name(name: &str) -> Option<Self> {
-            match name {
-                "name" => Some(F::Name),
-                "price" => Some(F::Price),
-                "created_at" => Some(F::CreatedAt),
-                "description" => Some(F::Description),
-                _ => None,
+    impl std::str::FromStr for F {
+        type Err = ();
+        fn from_str(s: &str) -> std::result::Result<Self, ()> {
+            match s {
+                "name" => Ok(F::Name),
+                "price" => Ok(F::Price),
+                "created_at" => Ok(F::CreatedAt),
+                "description" => Ok(F::Description),
+                _ => Err(()),
             }
         }
+    }
+
+    impl Field for F {
 
         fn allowed_comparators(&self) -> &[Comparator] {
             match self {

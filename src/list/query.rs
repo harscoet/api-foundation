@@ -102,14 +102,18 @@ mod tests {
         Price,
     }
 
-    impl FieldTrait for Field {
-        fn from_field_name(name: &str) -> Option<Self> {
-            match name {
-                "name" => Some(Field::Name),
-                "price" => Some(Field::Price),
-                _ => None,
+    impl std::str::FromStr for Field {
+        type Err = ();
+        fn from_str(s: &str) -> std::result::Result<Self, ()> {
+            match s {
+                "name" => Ok(Field::Name),
+                "price" => Ok(Field::Price),
+                _ => Err(()),
             }
         }
+    }
+
+    impl FieldTrait for Field {
 
         fn allowed_comparators(&self) -> &[Comparator] {
             match self {

@@ -19,15 +19,19 @@ mod tests {
         Active,
     }
 
-    impl Field for F {
-        fn from_field_name(name: &str) -> Option<Self> {
-            match name {
-                "name" => Some(F::Name),
-                "price" => Some(F::Price),
-                "active" => Some(F::Active),
-                _ => None,
+    impl std::str::FromStr for F {
+        type Err = ();
+        fn from_str(s: &str) -> Result<Self, ()> {
+            match s {
+                "name" => Ok(F::Name),
+                "price" => Ok(F::Price),
+                "active" => Ok(F::Active),
+                _ => Err(()),
             }
         }
+    }
+
+    impl Field for F {
 
         fn allowed_comparators(&self) -> &[Comparator] {
             match self {

@@ -1,14 +1,14 @@
 use aip_160::Comparator;
+use std::str::FromStr;
 
 /// Implemented once per resource's field enum.
 ///
 /// Capabilities default to the safe minimum: not filterable, not orderable.
 /// Override only what the field actually supports.
-pub trait Field: Sized {
-    /// Map a protobuf field string to the typed enum variant.
-    /// Return `None` for unknown names — callers surface this as an error.
-    fn from_field_name(name: &str) -> Option<Self>;
-
+///
+/// The `FromStr` bound maps the protobuf field string to the typed enum variant.
+/// Return `Err` for unknown names — callers surface this as `Error::UnknownField`.
+pub trait Field: Sized + FromStr {
     /// Comparators allowed when this field appears in a filter expression.
     /// Default `&[]` makes the field non-filterable: any comparator is rejected.
     fn allowed_comparators(&self) -> &[Comparator] {
@@ -31,15 +31,18 @@ mod tests {
         Price,
     }
 
-    impl Field for F {
-        fn from_field_name(name: &str) -> Option<Self> {
-            match name {
-                "name" => Some(F::Name),
-                "price" => Some(F::Price),
-                _ => None,
+    impl std::str::FromStr for F {
+        type Err = ();
+        fn from_str(s: &str) -> Result<Self, ()> {
+            match s {
+                "name" => Ok(F::Name),
+                "price" => Ok(F::Price),
+                _ => Err(()),
             }
         }
+    }
 
+    impl Field for F {
         fn allowed_comparators(&self) -> &[Comparator] {
             &[]
         }
@@ -47,11 +50,11 @@ mod tests {
 
     #[test]
     fn field_unknown_name_returns_none() {
-        assert!(F::from_field_name("unknown").is_none());
+        assert!("unknown".parse::<F>().is_err());
     }
 
     #[test]
     fn field_known_name_returns_variant() {
-        assert_eq!(F::from_field_name("name"), Some(F::Name));
+        assert_eq!("name".parse::<F>().ok(), Some(F::Name));
     }
 }

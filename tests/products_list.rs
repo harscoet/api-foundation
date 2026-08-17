@@ -75,10 +75,6 @@ enum ProductField {
 }
 
 impl Field for ProductField {
-    fn from_field_name(name: &str) -> Option<Self> {
-        name.parse().ok()
-    }
-
     fn allowed_comparators(&self) -> &[Comparator] {
         match self {
             Self::Name => &[Comparator::Equal, Comparator::Has],
