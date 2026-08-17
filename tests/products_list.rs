@@ -164,17 +164,15 @@ impl ProductView {
 // ordering, cursor, view SELECT). `foundation_diesel::diesel_list` orchestrates
 // the full AIP-158 pagination loop generically.
 
-type BoxedQuery<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
-
 struct Products;
 
 impl DieselList for Products {
     type Field = ProductField;
     type View = ProductView;
     type Response = ProductResponse;
-    type Query<'a> = BoxedQuery<'a>;
+    type Query<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 
-    fn base_query<'a>(filter: Option<&'a TypedFilter<ProductField>>) -> QueryResult<BoxedQuery<'a>> {
+    fn base_query<'a>(filter: Option<&'a TypedFilter<ProductField>>) -> QueryResult<Self::Query<'a>> {
         foundation_diesel::base_query(products::table.into_boxed(), filter)
     }
 
@@ -182,7 +180,7 @@ impl DieselList for Products {
         Self::base_query(filter)?.count().get_result(conn)
     }
 
-    fn apply_ordering<'a, 'b>(q: BoxedQuery<'a>, order_by: Option<&'b OrderBy<ProductField>>) -> BoxedQuery<'a>
+    fn apply_ordering<'a, 'b>(q: Self::Query<'a>, order_by: Option<&'b OrderBy<ProductField>>) -> Self::Query<'a>
     where
         Self: 'a
     {
@@ -197,7 +195,7 @@ impl DieselList for Products {
         }
     }
 
-    fn apply_cursor<'a, 'b>(q: BoxedQuery<'a>, token: &'b PageToken, order_by: Option<&'b OrderBy<ProductField>>) -> BoxedQuery<'a>
+    fn apply_cursor<'a, 'b>(q: Self::Query<'a>, token: &'b PageToken, order_by: Option<&'b OrderBy<ProductField>>) -> Self::Query<'a>
     where
         Self: 'a
     {
@@ -250,7 +248,7 @@ impl DieselList for Products {
         }
     }
 
-    fn load<'a>(q: BoxedQuery<'a>, view: &ProductView, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<ProductResponse>> {
+    fn load<'a>(q: Self::Query<'a>, view: &ProductView, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<ProductResponse>> {
         Ok(match view {
             ProductView::Basic => q
                 .select(ProductBasic::as_select())
