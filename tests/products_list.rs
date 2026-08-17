@@ -21,7 +21,7 @@ use api_foundation::{
     order_by::{Direction, OrderBy},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
 };
-use foundation_diesel::DieselField;
+use foundation_diesel::{DieselField, DieselList};
 
 // ── Diesel schema ─────────────────────────────────────────────────────────────
 
@@ -160,16 +160,134 @@ impl ProductView {
 
 // ── Repository ────────────────────────────────────────────────────────────────
 //
-// Translates ListQuery<ProductField> + ProductView → diesel query → Page<ProductResponse>.
-// No filter parsing, no token encoding, no consistency checks — all handled
-// by api-foundation before this function is even called.
+// `Products` implements `DieselList` — the entity-specific mappings (table,
+// ordering, cursor, view SELECT). `foundation_diesel::diesel_list` orchestrates
+// the full AIP-158 pagination loop generically.
 
 type BoxedQuery<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 
-/// Base query: only the filter applied, no cursor / ordering / limit.
-/// Reused for both COUNT(*) and the paginated SELECT.
-fn base_query(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<BoxedQuery<'_>> {
-    foundation_diesel::base_query(products::table.into_boxed(), filter)
+struct Products;
+
+impl DieselList for Products {
+    type Field = ProductField;
+    type View = ProductView;
+    type Response = ProductResponse;
+    type Query<'a> = BoxedQuery<'a>;
+
+    fn base_query<'a>(filter: Option<&'a TypedFilter<ProductField>>) -> QueryResult<BoxedQuery<'a>> {
+        foundation_diesel::base_query(products::table.into_boxed(), filter)
+    }
+
+    fn count(filter: Option<&TypedFilter<ProductField>>, conn: &mut PgConnection) -> QueryResult<i64> {
+        Self::base_query(filter)?.count().get_result(conn)
+    }
+
+    fn apply_ordering<'a, 'b>(q: BoxedQuery<'a>, order_by: Option<&'b OrderBy<ProductField>>) -> BoxedQuery<'a>
+    where
+        Self: 'a
+    {
+        match order_by.and_then(|o| o.clauses.first()) {
+            None => q.order(products::id.asc()),
+            Some(clause) => match (&clause.field, &clause.direction) {
+                (ProductField::Name, Direction::Asc)  => q.order((products::name.asc(),  products::id.asc())),
+                (ProductField::Name, Direction::Desc) => q.order((products::name.desc(), products::id.asc())),
+                (ProductField::Price, Direction::Asc)  => q.order((products::price.asc(),  products::id.asc())),
+                (ProductField::Price, Direction::Desc) => q.order((products::price.desc(), products::id.asc())),
+            },
+        }
+    }
+
+    fn apply_cursor<'a, 'b>(q: BoxedQuery<'a>, token: &'b PageToken, order_by: Option<&'b OrderBy<ProductField>>) -> BoxedQuery<'a>
+    where
+        Self: 'a
+    {
+        let cursor = token.cursor();
+
+        let cursor_id = cursor
+            .iter()
+            .find(|e| e.field_name == "id")
+            .and_then(|e| if let CursorValue::Int64(n) = e.value { Some(n) } else { None })
+            .unwrap_or(0);
+
+        match order_by.and_then(|ob| ob.clauses.first()) {
+            None => q.filter(products::id.gt(cursor_id)),
+            Some(clause) => match &clause.field {
+                ProductField::Price => {
+                    let cursor_price = cursor
+                        .iter()
+                        .find(|e| e.field_name == "price")
+                        .and_then(|e| if let CursorValue::Float64(f) = e.value { Some(f) } else { None })
+                        .unwrap_or(f64::MIN);
+                    match clause.direction {
+                        Direction::Asc => q.filter(
+                            products::price.gt(cursor_price)
+                                .or(products::price.eq(cursor_price).and(products::id.gt(cursor_id))),
+                        ),
+                        Direction::Desc => q.filter(
+                            products::price.lt(cursor_price)
+                                .or(products::price.eq(cursor_price).and(products::id.gt(cursor_id))),
+                        ),
+                    }
+                }
+                ProductField::Name => {
+                    let cursor_name = cursor
+                        .iter()
+                        .find(|e| e.field_name == "name")
+                        .and_then(|e| if let CursorValue::String(s) = &e.value { Some(s.clone()) } else { None })
+                        .unwrap_or_default();
+                    match clause.direction {
+                        Direction::Asc => q.filter(
+                            products::name.gt(cursor_name.clone())
+                                .or(products::name.eq(cursor_name).and(products::id.gt(cursor_id))),
+                        ),
+                        Direction::Desc => q.filter(
+                            products::name.lt(cursor_name.clone())
+                                .or(products::name.eq(cursor_name).and(products::id.gt(cursor_id))),
+                        ),
+                    }
+                }
+            },
+        }
+    }
+
+    fn load<'a>(q: BoxedQuery<'a>, view: &ProductView, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<ProductResponse>> {
+        Ok(match view {
+            ProductView::Basic => q
+                .select(ProductBasic::as_select())
+                .limit(limit)
+                .load::<ProductBasic>(conn)?
+                .into_iter()
+                .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: None })
+                .collect(),
+            ProductView::Full => q
+                .limit(limit)
+                .load::<Product>(conn)?
+                .into_iter()
+                .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: Some(p.price) })
+                .collect(),
+        })
+    }
+
+    fn build_cursor(item: &ProductResponse, order_by: Option<&OrderBy<ProductField>>) -> Vec<CursorEntry> {
+        let mut cursor = Vec::new();
+        if let Some(clause) = order_by.and_then(|ob| ob.clauses.first()) {
+            match &clause.field {
+                ProductField::Name => {
+                    if let Some(ref name) = item.name {
+                        cursor.push(CursorEntry { field_name: "name".to_string(), value: CursorValue::String(name.clone()) });
+                    }
+                }
+                ProductField::Price => {
+                    if let Some(price) = item.price {
+                        cursor.push(CursorEntry { field_name: "price".to_string(), value: CursorValue::Float64(price) });
+                    }
+                }
+            }
+        }
+        // id is always last — stable tiebreaker regardless of ordering
+        cursor.push(CursorEntry { field_name: "id".to_string(), value: CursorValue::Int64(item.id) });
+        cursor
+    }
 }
 
 fn list_products(
@@ -177,168 +295,7 @@ fn list_products(
     query: ListQuery<ProductField>,
     view: ProductView,
 ) -> QueryResult<Page<ProductResponse>> {
-    // COUNT(*) — base query with filter only, no cursor
-    let total_size: i64 = base_query(query.filter.as_ref())?
-        .count()
-        .get_result(conn)?;
-
-    // Paginated query — base query + cursor + ordering + limit
-    let mut q = base_query(query.filter.as_ref())?;
-    if let Some(ref token) = query.cursor {
-        q = apply_cursor(q, token, query.order_by.as_ref());
-    }
-    q = apply_ordering(q, query.order_by.as_ref());
-
-    let limit = (query.page_size + 1) as i64;
-
-    // View determines the SQL SELECT — only the requested columns are loaded.
-    let mut rows: Vec<ProductResponse> = match view {
-        ProductView::Basic => q
-            .select(ProductBasic::as_select())
-            .limit(limit)
-            .load::<ProductBasic>(conn)?
-            .into_iter()
-            .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: None })
-            .collect(),
-        ProductView::Full => q
-            .limit(limit)
-            .load::<Product>(conn)?
-            .into_iter()
-            .map(|p| ProductResponse { id: p.id, name: Some(p.name), price: Some(p.price) })
-            .collect(),
-    };
-
-    let has_next = rows.len() as u32 > query.page_size;
-    if has_next {
-        rows.pop();
-    }
-
-    let next_page_token = has_next.then(|| {
-        let last = rows.last().unwrap();
-        PageToken::new(build_cursor(last, query.order_by.as_ref()), query.fingerprint()).encode()
-    });
-
-    Ok(Page {
-        items: rows,
-        next_page_token,
-        total_size: Some(total_size as u32),
-    })
-}
-
-fn apply_ordering<'a>(q: BoxedQuery<'a>, order_by: Option<&OrderBy<ProductField>>) -> BoxedQuery<'a> {
-    match order_by.and_then(|o| o.clauses.first()) {
-        None => q.order(products::id.asc()),
-        Some(clause) => match (&clause.field, &clause.direction) {
-            (ProductField::Name, Direction::Asc) => {
-                q.order((products::name.asc(), products::id.asc()))
-            }
-            (ProductField::Name, Direction::Desc) => {
-                q.order((products::name.desc(), products::id.asc()))
-            }
-            (ProductField::Price, Direction::Asc) => {
-                q.order((products::price.asc(), products::id.asc()))
-            }
-            (ProductField::Price, Direction::Desc) => {
-                q.order((products::price.desc(), products::id.asc()))
-            }
-        },
-    }
-}
-
-fn build_cursor(product: &ProductResponse, order_by: Option<&OrderBy<ProductField>>) -> Vec<CursorEntry> {
-    let mut cursor = Vec::new();
-    if let Some(clause) = order_by.and_then(|ob| ob.clauses.first()) {
-        match &clause.field {
-            ProductField::Name => {
-                if let Some(ref name) = product.name {
-                    cursor.push(CursorEntry {
-                        field_name: "name".to_string(),
-                        value: CursorValue::String(name.clone()),
-                    });
-                }
-            }
-            ProductField::Price => {
-                if let Some(price) = product.price {
-                    cursor.push(CursorEntry {
-                        field_name: "price".to_string(),
-                        value: CursorValue::Float64(price),
-                    });
-                }
-            }
-        }
-    }
-    // id is always last — stable tiebreaker regardless of ordering
-    cursor.push(CursorEntry {
-        field_name: "id".to_string(),
-        value: CursorValue::Int64(product.id),
-    });
-    cursor
-}
-
-fn apply_cursor<'a>(
-    q: BoxedQuery<'a>,
-    token: &PageToken,
-    order_by: Option<&OrderBy<ProductField>>,
-) -> BoxedQuery<'a> {
-    let cursor = token.cursor();
-
-    let cursor_id = cursor
-        .iter()
-        .find(|e| e.field_name == "id")
-        .and_then(|e| {
-            if let CursorValue::Int64(n) = e.value { Some(n) } else { None }
-        })
-        .unwrap_or(0);
-
-    let primary = order_by.and_then(|ob| ob.clauses.first());
-
-    match primary {
-        None => q.filter(products::id.gt(cursor_id)),
-        Some(clause) => match &clause.field {
-            ProductField::Price => {
-                let cursor_price = cursor
-                    .iter()
-                    .find(|e| e.field_name == "price")
-                    .and_then(|e| {
-                        if let CursorValue::Float64(f) = e.value { Some(f) } else { None }
-                    })
-                    .unwrap_or(f64::MIN);
-                match clause.direction {
-                    Direction::Asc => q.filter(
-                        products::price
-                            .gt(cursor_price)
-                            .or(products::price.eq(cursor_price).and(products::id.gt(cursor_id))),
-                    ),
-                    Direction::Desc => q.filter(
-                        products::price
-                            .lt(cursor_price)
-                            .or(products::price.eq(cursor_price).and(products::id.gt(cursor_id))),
-                    ),
-                }
-            }
-            ProductField::Name => {
-                let cursor_name = cursor
-                    .iter()
-                    .find(|e| e.field_name == "name")
-                    .and_then(|e| {
-                        if let CursorValue::String(s) = &e.value { Some(s.clone()) } else { None }
-                    })
-                    .unwrap_or_default();
-                match clause.direction {
-                    Direction::Asc => q.filter(
-                        products::name
-                            .gt(cursor_name.clone())
-                            .or(products::name.eq(cursor_name).and(products::id.gt(cursor_id))),
-                    ),
-                    Direction::Desc => q.filter(
-                        products::name
-                            .lt(cursor_name.clone())
-                            .or(products::name.eq(cursor_name).and(products::id.gt(cursor_id))),
-                    ),
-                }
-            }
-        },
-    }
+    foundation_diesel::diesel_list::<Products>(conn, query, view)
 }
 
 // ── Simulated tonic handler ───────────────────────────────────────────────────
