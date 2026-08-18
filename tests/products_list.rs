@@ -13,8 +13,10 @@ use diesel::prelude::*;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
 mod foundation_diesel;
-#[macro_use]
-mod foundation_diesel_macros;
+mod diesel_macros;
+use diesel_macros::{
+    diesel_cursor_filter, diesel_cursor_value, diesel_filter, diesel_load, diesel_order_by,
+};
 
 use api_foundation::{
     field::Field,

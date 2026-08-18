@@ -1,3 +1,6 @@
+// Helper module — included via `mod` from test binaries, not compiled standalone.
+#![allow(unused)]
+
 /// Generate the `apply_field_ordering` match body for a diesel `BoxedQuery`.
 ///
 /// Each `FieldVariant => column` pair expands to two match arms (Asc + Desc).
@@ -23,7 +26,6 @@
 /// Note: a more compact `[num: gt, ge, ...]` DSL was attempted but Rust does not allow
 /// macros to expand to match arms — `macros cannot expand to match arms` (stable limit).
 /// The explicit arm form is the best achievable with `macro_rules!`.
-#[allow(unused_macros)]
 macro_rules! diesel_filter {
     (
         $field:expr, $comparator:expr, $value:expr,
@@ -39,6 +41,7 @@ macro_rules! diesel_filter {
         })
     };
 }
+pub(crate) use diesel_filter;
 
 /// Generate the `field_cursor_value` match body for a `DieselList` impl.
 ///
@@ -52,7 +55,6 @@ macro_rules! diesel_filter {
 ///
 /// Note: `@map` expands to an expression (the arm body), not a match arm — valid unlike `@arm`.
 /// `item` is not a macro parameter; the accessor expression (`item.name`) closes over it directly.
-#[allow(unused_macros)]
 macro_rules! diesel_cursor_value {
     (
         $field:expr,
@@ -95,6 +97,7 @@ macro_rules! diesel_cursor_value {
         })
     };
 }
+pub(crate) use diesel_cursor_value;
 
 /// Generate the `apply_field_cursor` keyset WHERE clause for a diesel `BoxedQuery`.
 ///
@@ -112,7 +115,6 @@ macro_rules! diesel_cursor_value {
 ///     )
 /// }
 /// ```
-#[allow(unused_macros)]
 macro_rules! diesel_cursor_filter {
     (
         $q:expr, $field:expr, $direction:expr, $cursor:expr,
@@ -144,6 +146,7 @@ macro_rules! diesel_cursor_filter {
         foundation_diesel::cursor_string($cursor, Into::<&'static str>::into($field))
     };
 }
+pub(crate) use diesel_cursor_filter;
 
 /// Generate the `load` body for a view-dispatched diesel SELECT.
 ///
@@ -152,7 +155,6 @@ macro_rules! diesel_cursor_filter {
 ///
 /// Note: `.select(Model::as_select())` is always emitted — for a full model this is
 /// equivalent to no explicit select (all columns), so both views use the same pattern.
-#[allow(unused_macros)]
 macro_rules! diesel_load {
     (
         $q:expr, $view:expr, $limit:expr, $conn:expr,
@@ -171,8 +173,8 @@ macro_rules! diesel_load {
         })
     };
 }
+pub(crate) use diesel_load;
 
-#[allow(unused_macros)]
 macro_rules! diesel_order_by {
     (
         $q:expr, $field:expr, $direction:expr,
@@ -187,3 +189,4 @@ macro_rules! diesel_order_by {
         }
     };
 }
+pub(crate) use diesel_order_by;
