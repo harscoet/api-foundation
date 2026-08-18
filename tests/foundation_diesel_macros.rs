@@ -43,7 +43,12 @@ macro_rules! diesel_filter {
 /// Generate the `field_cursor_value` match body for a `DieselList` impl.
 ///
 /// Each `FieldVariant => [type] item.field` arm extracts the cursor value for a sort field.
-/// Supported types: `str` (Option<String>, uses as_ref + clone), `f64` (Option<f64>, Copy).
+/// Supported types:
+///   `str`     — String (non-optional, cloned)
+///   `f64`     — f64 (non-optional, copied)
+///   `i64`     — i64 (non-optional, copied)
+///   `opt_str` — Option<String>
+///   `opt_f64` — Option<f64>
 ///
 /// Note: `@map` expands to an expression (the arm body), not a match arm — valid unlike `@arm`.
 /// `item` is not a macro parameter; the accessor expression (`item.name`) closes over it directly.
@@ -60,12 +65,30 @@ macro_rules! diesel_cursor_value {
         }
     };
     (@map $field:expr, $accessor:expr, str) => {
+        Some(api_foundation::pagination::CursorEntry {
+            field_name: $field.to_string(),
+            value: api_foundation::pagination::CursorValue::String($accessor.clone()),
+        })
+    };
+    (@map $field:expr, $accessor:expr, f64) => {
+        Some(api_foundation::pagination::CursorEntry {
+            field_name: $field.to_string(),
+            value: api_foundation::pagination::CursorValue::Float64($accessor),
+        })
+    };
+    (@map $field:expr, $accessor:expr, i64) => {
+        Some(api_foundation::pagination::CursorEntry {
+            field_name: $field.to_string(),
+            value: api_foundation::pagination::CursorValue::Int64($accessor),
+        })
+    };
+    (@map $field:expr, $accessor:expr, opt_str) => {
         $accessor.as_ref().map(|v| api_foundation::pagination::CursorEntry {
             field_name: $field.to_string(),
             value: api_foundation::pagination::CursorValue::String(v.clone()),
         })
     };
-    (@map $field:expr, $accessor:expr, f64) => {
+    (@map $field:expr, $accessor:expr, opt_f64) => {
         $accessor.map(|v| api_foundation::pagination::CursorEntry {
             field_name: $field.to_string(),
             value: api_foundation::pagination::CursorValue::Float64(v),

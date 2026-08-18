@@ -211,8 +211,8 @@ impl DieselList for Products {
 
     fn field_cursor_value(field: &Self::Field, item: &Self::Response) -> Option<CursorEntry> {
         diesel_cursor_value!(field,
-            ProductField::Name  => [str] item.name,
-            ProductField::Price => [f64] item.price,
+            ProductField::Name  => [opt_str] item.name,
+            ProductField::Price => [opt_f64] item.price,
         )
     }
 

@@ -6,7 +6,7 @@
 //! Demonstrates DieselList flexibility beyond the Products baseline:
 //!   - Always-applied server-side filter: `deleted_at IS NULL` (soft delete)
 //!   - JOIN in `load` — Full view joins customers, Minimal skips it
-//!   - Manual `field_cursor_value` — fields are non-optional, `diesel_cursor_value!` expects Option<T>
+//!   - Manual `load` — the JOIN for Full view requires a custom select tuple
 
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
@@ -229,24 +229,12 @@ impl DieselList for Orders {
         }
     }
 
-    // Written manually: fields are non-optional on OrderResponse, so `diesel_cursor_value!`
-    // (which expects Option<T> accessors) doesn't apply here.
     fn field_cursor_value(field: &Self::Field, item: &Self::Response) -> Option<CursorEntry> {
-        let entry = match field {
-            OrderField::Amount => CursorEntry {
-                field_name: field.to_string(),
-                value: CursorValue::Float64(item.amount),
-            },
-            OrderField::Status => CursorEntry {
-                field_name: field.to_string(),
-                value: CursorValue::String(item.status.clone()),
-            },
-            OrderField::CreatedAt => CursorEntry {
-                field_name: field.to_string(),
-                value: CursorValue::Int64(item.created_at),
-            },
-        };
-        Some(entry)
+        diesel_cursor_value!(field,
+            OrderField::Amount    => [f64] item.amount,
+            OrderField::Status    => [str] item.status,
+            OrderField::CreatedAt => [i64] item.created_at,
+        )
     }
 
     fn tiebreaker(item: &Self::Response) -> CursorEntry {
