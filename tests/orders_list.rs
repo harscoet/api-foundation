@@ -6,8 +6,7 @@
 //! Demonstrates DieselList flexibility beyond the Products baseline:
 //!   - Always-applied server-side filter: `deleted_at IS NULL` (soft delete)
 //!   - JOIN in `load` — Full view joins customers, Minimal skips it
-//!   - Manual `apply_field_cursor` / `field_cursor_value` when macros don't fit
-//!     (CreatedAt is i64; the macro helpers only cover f64 and str)
+//!   - Manual `field_cursor_value` — fields are non-optional, `diesel_cursor_value!` expects Option<T>
 
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
@@ -171,37 +170,18 @@ impl DieselList for Orders {
         q.filter(orders::id.gt(foundation_diesel::cursor_i64(cursor, "id")))
     }
 
-    // Written manually: `diesel_cursor_filter!` only covers f64 and str, not i64.
     fn apply_field_cursor<'a>(
         q: Self::Query<'a>,
         field: &Self::Field,
         direction: &Direction,
         cursor: &[CursorEntry],
     ) -> Self::Query<'a> {
-        let id = foundation_diesel::cursor_i64(cursor, "id");
-        match field {
-            OrderField::Amount => {
-                let v = foundation_diesel::cursor_f64(cursor, "amount");
-                match direction {
-                    Direction::Asc => q.filter(orders::amount.gt(v).or(orders::amount.eq(v).and(orders::id.gt(id)))),
-                    Direction::Desc => q.filter(orders::amount.lt(v).or(orders::amount.eq(v).and(orders::id.gt(id)))),
-                }
-            }
-            OrderField::Status => {
-                let v = foundation_diesel::cursor_string(cursor, "status");
-                match direction {
-                    Direction::Asc => q.filter(orders::status.gt(v.clone()).or(orders::status.eq(v).and(orders::id.gt(id)))),
-                    Direction::Desc => q.filter(orders::status.lt(v.clone()).or(orders::status.eq(v).and(orders::id.gt(id)))),
-                }
-            }
-            OrderField::CreatedAt => {
-                let v = foundation_diesel::cursor_i64(cursor, "created_at");
-                match direction {
-                    Direction::Asc => q.filter(orders::created_at.gt(v).or(orders::created_at.eq(v).and(orders::id.gt(id)))),
-                    Direction::Desc => q.filter(orders::created_at.lt(v).or(orders::created_at.eq(v).and(orders::id.gt(id)))),
-                }
-            }
-        }
+        diesel_cursor_filter!(q, field, direction, cursor,
+            tiebreaker: orders::id,
+            OrderField::Amount    => orders::amount     [f64],
+            OrderField::Status    => orders::status     [str],
+            OrderField::CreatedAt => orders::created_at [i64],
+        )
     }
 
     // Written manually: `diesel_load!` assumes a single Selectable model; the join

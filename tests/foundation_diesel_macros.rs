@@ -109,11 +109,13 @@ macro_rules! diesel_cursor_filter {
             )+
         }
     }};
-    // Supported types: [f64] → cursor_f64, [str] → cursor_string.
-    // To add a new type (e.g. [timestamp]), add a matching @extract arm here
-    // and a corresponding cursor_* helper in foundation_diesel.
+    // Supported types: [f64] → cursor_f64, [i64] → cursor_i64, [str] → cursor_string.
+    // To add a new type, add a matching @extract arm here and a cursor_* helper in foundation_diesel.
     (@extract f64, $cursor:expr, $field:expr) => {
         foundation_diesel::cursor_f64($cursor, Into::<&'static str>::into($field))
+    };
+    (@extract i64, $cursor:expr, $field:expr) => {
+        foundation_diesel::cursor_i64($cursor, Into::<&'static str>::into($field))
     };
     (@extract str, $cursor:expr, $field:expr) => {
         foundation_diesel::cursor_string($cursor, Into::<&'static str>::into($field))
