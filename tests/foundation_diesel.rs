@@ -2,7 +2,7 @@
 //!
 //! Provides the generic diesel integration layer for `api-foundation` types.
 //! Entity-specific code (field→column mappings, ordering, cursors) lives in
-//! the repository layer; only the AIP-160 filter recursion is generic here.
+//! the repository layer; only the AIP-160 filter AST traversal is generic here.
 
 use api_foundation::{
     field::Field,
@@ -11,102 +11,53 @@ use api_foundation::{
     order_by::{Direction, OrderBy},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
 };
+use diesel::expression::BoxableExpression;
+use diesel::pg::Pg;
 use diesel::pg::PgConnection;
+use diesel::query_dsl::methods::FilterDsl;
+use diesel::sql_types::Bool;
 use diesel::QueryResult;
-
-/// Extension of [`Field`] for diesel-backed repositories.
-///
-/// The implementor provides only `apply_restriction` — the specific
-/// (field, comparator, value) tuples valid for their entity. The generic
-/// `And` recursion is handled by [`apply_filter`].
-pub trait DieselField: Field {
-    type Query<'a>;
-
-    fn apply_restriction<'a>(
-        query: Self::Query<'a>,
-        field: &Self,
-        comparator: &Comparator,
-        value: &'a Value,
-    ) -> QueryResult<Self::Query<'a>>;
-}
-
-/// Apply a typed filter expression to a diesel query.
-///
-/// Handles `And` recursion generically. `Or`/`Not` return an error — they
-/// require `BoxableExpression` and will be supported in a future version.
-pub fn apply_filter<'a, F: DieselField>(
-    query: F::Query<'a>,
-    expr: &'a TypedExpression<F>,
-) -> QueryResult<F::Query<'a>> {
-    match expr {
-        TypedExpression::And(l, r) => apply_filter(apply_filter(query, l)?, r),
-        TypedExpression::Restriction(r) => {
-            F::apply_restriction(query, &r.field, &r.comparator, &r.value)
-        }
-        _ => Err(diesel::result::Error::QueryBuilderError(
-            "OR/NOT not supported — requires BoxableExpression (future api-foundation-diesel)".into(),
-        )),
-    }
-}
-
-/// Extract an `i64` cursor value by field name. Returns `0` if absent (defensive fallback).
-pub fn cursor_i64(cursor: &[CursorEntry], field_name: &str) -> i64 {
-    cursor
-        .iter()
-        .find(|e| e.field_name == field_name)
-        .and_then(|e| if let CursorValue::Int64(n) = e.value { Some(n) } else { None })
-        .unwrap_or(0)
-}
-
-/// Extract an `f64` cursor value by field name. Returns `f64::MIN` if absent.
-pub fn cursor_f64(cursor: &[CursorEntry], field_name: &str) -> f64 {
-    cursor
-        .iter()
-        .find(|e| e.field_name == field_name)
-        .and_then(|e| if let CursorValue::Float64(f) = e.value { Some(f) } else { None })
-        .unwrap_or(f64::MIN)
-}
-
-/// Extract a `String` cursor value by field name. Returns `""` if absent.
-pub fn cursor_string(cursor: &[CursorEntry], field_name: &str) -> String {
-    cursor
-        .iter()
-        .find(|e| e.field_name == field_name)
-        .and_then(|e| if let CursorValue::String(s) = &e.value { Some(s.clone()) } else { None })
-        .unwrap_or_default()
-}
-
-/// Build a base query with only the filter applied — no cursor, ordering, or limit.
-///
-/// Pass the table's `into_boxed()` as `table_query`; the filter is applied on top.
-/// Reuse for both `COUNT(*)` and the paginated `SELECT` to avoid duplicating filter logic.
-pub fn base_query<'a, F: DieselField>(
-    table_query: F::Query<'a>,
-    filter: Option<&'a TypedFilter<F>>,
-) -> QueryResult<F::Query<'a>> {
-    match filter {
-        Some(f) => apply_filter(table_query, &f.expression),
-        None => Ok(table_query),
-    }
-}
 
 /// Contract for a diesel-backed list repository.
 ///
 /// The implementor provides entity-specific mappings (table, ordering, cursor,
-/// view SELECT). [`diesel_list`] orchestrates the full AIP-158 pagination loop
-/// generically — COUNT, cursor, page_size+1, token encoding.
+/// view SELECT, and filter restrictions). [`diesel_list`] orchestrates the full
+/// AIP-158 pagination loop generically — COUNT, cursor, page_size+1, token encoding.
+///
+/// ## Filter
+///
+/// `restriction_expr` converts a single AIP-160 restriction to a boxed diesel predicate.
+/// [`build_predicate`] then recursively composes the full AST (AND / OR / NOT) before
+/// applying everything with a single `.filter()` call.
+///
+/// This works because `dyn BoxableExpression<...> + 'static` is automatically `Send`
+/// (diesel's blanket impl requires `where Self: Send`, so all implementors are Send and
+/// the auto-trait propagates to the trait object). `And<Box<dyn ...>, Box<dyn ...>>`
+/// is therefore itself boxable, enabling recursive composition.
 pub trait DieselList {
-    type Field: DieselField;
-    type View;
-    type Response;
+    type Field: Field;
+    /// The entity's diesel table type — used to type-check boxed filter predicates.
+    type Table: diesel::Table + 'static;
     /// The entity's `BoxedQuery` type. Set to `your_table::BoxedQuery<'a, Pg>`.
     type Query<'a>;
+    type View;
+    type Response;
 
     /// Table initialization + filter application.
-    /// Typically: `foundation_diesel::base_query(my_table::table.into_boxed(), filter)`
+    /// Typically: `foundation_diesel::base_query::<Self>(my_table::table.into_boxed(), filter)`
     fn base_query<'a>(
-        filter: Option<&'a TypedFilter<Self::Field>>,
+        filter: Option<&TypedFilter<Self::Field>>,
     ) -> QueryResult<Self::Query<'a>>;
+
+    /// Build a boxed diesel predicate for a single AIP-160 restriction.
+    ///
+    /// Values must be owned (clone strings, copy numbers) to satisfy `'static`.
+    /// [`build_predicate`] composes the results generically for AND / OR / NOT.
+    fn restriction_expr(
+        field: &Self::Field,
+        comparator: &Comparator,
+        value: &Value,
+    ) -> QueryResult<Box<dyn BoxableExpression<Self::Table, Pg, SqlType = Bool> + 'static>>;
 
     /// Total count with filter only. Return `None` to skip the COUNT query entirely.
     /// Default: `Ok(None)`. Override with `Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))`.
@@ -170,7 +121,6 @@ pub trait DieselList {
     }
 
     /// Execute the view-specific SELECT and map rows to `Response`.
-    /// This is the only method that varies meaningfully between views.
     fn load<'a>(
         query: Self::Query<'a>,
         view: &Self::View,
@@ -197,10 +147,101 @@ pub trait DieselList {
     }
 }
 
-/// Generic AIP-158 pagination loop for any [`DieselList`] implementation.
+/// Recursively build a boxed predicate from a typed filter AST.
 ///
-/// Handles COUNT, cursor application, page_size+1 trick, has_next detection,
-/// and next-page token encoding. The entity only implements [`DieselList`].
+/// AND / OR / NOT are composed generically using `.and()` / `.or()` / `dsl::not()`.
+/// `+ 'static` (not `+ Send`) is the right bound — `dyn BoxableExpression + 'static`
+/// is automatically `Send` because `BoxableExpression` requires `where Self: Send`,
+/// so the auto-trait propagates to the trait object. Adding explicit `+ Send` would
+/// create a distinct dyn type that diesel's blanket impls don't cover.
+fn build_predicate<L: DieselList>(
+    expr: &TypedExpression<L::Field>,
+) -> QueryResult<Box<dyn BoxableExpression<L::Table, Pg, SqlType = Bool> + 'static>> {
+    use diesel::BoolExpressionMethods;
+    match expr {
+        TypedExpression::And(l, r) => {
+            let left = build_predicate::<L>(l)?;
+            let right = build_predicate::<L>(r)?;
+            Ok(Box::new(left.and(right)))
+        }
+        TypedExpression::Or(l, r) => {
+            let left = build_predicate::<L>(l)?;
+            let right = build_predicate::<L>(r)?;
+            Ok(Box::new(left.or(right)))
+        }
+        TypedExpression::Not(e) => {
+            let inner = build_predicate::<L>(e)?;
+            Ok(Box::new(diesel::dsl::not(inner)))
+        }
+        TypedExpression::Restriction(r) => {
+            L::restriction_expr(&r.field, &r.comparator, &r.value)
+        }
+    }
+}
+
+/// Apply a typed filter to a diesel query — builds the full predicate tree then calls `.filter()` once.
+pub fn apply_filter<'a, L: DieselList>(
+    query: L::Query<'a>,
+    expr: &TypedExpression<L::Field>,
+) -> QueryResult<L::Query<'a>>
+where
+    L::Query<'a>: FilterDsl<
+        Box<dyn BoxableExpression<L::Table, Pg, SqlType = Bool> + 'static>,
+        Output = L::Query<'a>,
+    >,
+{
+    Ok(query.filter(build_predicate::<L>(expr)?))
+}
+
+/// Build a base query with only the filter applied — no cursor, ordering, or limit.
+///
+/// Pass the table's `into_boxed()` as `table_query`. The entire filter AST (AND/OR/NOT)
+/// is compiled to a single boxed predicate, then applied in one `.filter()` call.
+/// Reuse for both `COUNT(*)` and the paginated `SELECT` to avoid duplicating filter logic.
+pub fn base_query<'a, L: DieselList>(
+    table_query: L::Query<'a>,
+    filter: Option<&TypedFilter<L::Field>>,
+) -> QueryResult<L::Query<'a>>
+where
+    L::Query<'a>: FilterDsl<
+        Box<dyn BoxableExpression<L::Table, Pg, SqlType = Bool> + 'static>,
+        Output = L::Query<'a>,
+    >,
+{
+    match filter {
+        Some(f) => apply_filter::<L>(table_query, &f.expression),
+        None => Ok(table_query),
+    }
+}
+
+/// Extract an `i64` cursor value by field name. Returns `0` if absent.
+pub fn cursor_i64(cursor: &[CursorEntry], field_name: &str) -> i64 {
+    cursor
+        .iter()
+        .find(|e| e.field_name == field_name)
+        .and_then(|e| if let CursorValue::Int64(n) = e.value { Some(n) } else { None })
+        .unwrap_or(0)
+}
+
+/// Extract an `f64` cursor value by field name. Returns `f64::MIN` if absent.
+pub fn cursor_f64(cursor: &[CursorEntry], field_name: &str) -> f64 {
+    cursor
+        .iter()
+        .find(|e| e.field_name == field_name)
+        .and_then(|e| if let CursorValue::Float64(f) = e.value { Some(f) } else { None })
+        .unwrap_or(f64::MIN)
+}
+
+/// Extract a `String` cursor value by field name. Returns `""` if absent.
+pub fn cursor_string(cursor: &[CursorEntry], field_name: &str) -> String {
+    cursor
+        .iter()
+        .find(|e| e.field_name == field_name)
+        .and_then(|e| if let CursorValue::String(s) = &e.value { Some(s.clone()) } else { None })
+        .unwrap_or_default()
+}
+
+/// Generic AIP-158 pagination loop for any [`DieselList`] implementation.
 pub fn diesel_list<L: DieselList>(
     conn: &mut PgConnection,
     query: ListQuery<L::Field>,

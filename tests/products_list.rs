@@ -23,7 +23,7 @@ use api_foundation::{
     order_by::Direction,
     pagination::{CursorEntry, CursorValue, Page},
 };
-use foundation_diesel::{DieselField, DieselList};
+use foundation_diesel::DieselList;
 
 // ── Diesel schema ─────────────────────────────────────────────────────────────
 
@@ -95,25 +95,6 @@ impl Field for ProductField {
     }
 }
 
-impl DieselField for ProductField {
-    type Query<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
-
-    fn apply_restriction<'a>(
-        query: Self::Query<'a>,
-        field: &Self,
-        comparator: &Comparator,
-        value: &'a Value,
-    ) -> diesel::QueryResult<Self::Query<'a>> {
-        diesel_filter!(query, field, comparator, value,
-            (Self::Name,  Comparator::Equal,              Value::String(s)) => products::name.eq(s.clone()),
-            (Self::Price, Comparator::GreaterThan,        Value::Number(n)) => products::price.gt(n),
-            (Self::Price, Comparator::GreaterThanOrEqual, Value::Number(n)) => products::price.ge(n),
-            (Self::Price, Comparator::LessThan,           Value::Number(n)) => products::price.lt(n),
-            (Self::Price, Comparator::LessThanOrEqual,    Value::Number(n)) => products::price.le(n),
-        )
-    }
-}
-
 // ── ProductView (AIP-157) ─────────────────────────────────────────────────────
 //
 // The client selects a view; the server uses it to determine which columns to
@@ -150,12 +131,28 @@ struct Products;
 
 impl DieselList for Products {
     type Field = ProductField;
+    type Table = products::table;
     type View = ProductView;
     type Response = ProductResponse;
     type Query<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 
-    fn base_query<'a>(filter: Option<&'a TypedFilter<ProductField>>) -> QueryResult<Self::Query<'a>> {
-        foundation_diesel::base_query(products::table.into_boxed(), filter)
+    fn base_query<'a>(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<Self::Query<'a>> {
+        let q: products::BoxedQuery<'a, diesel::pg::Pg> = products::table.into_boxed();
+        foundation_diesel::base_query::<Products>(q, filter)
+    }
+
+    fn restriction_expr(
+        field: &ProductField,
+        comparator: &Comparator,
+        value: &Value,
+    ) -> diesel::QueryResult<Box<dyn diesel::expression::BoxableExpression<products::table, diesel::pg::Pg, SqlType = diesel::sql_types::Bool> + 'static>> {
+        diesel_filter!(field, comparator, value,
+            (ProductField::Name,  Comparator::Equal,              Value::String(s)) => products::name.eq(s.clone()),
+            (ProductField::Price, Comparator::GreaterThan,        Value::Number(n)) => products::price.gt(*n),
+            (ProductField::Price, Comparator::GreaterThanOrEqual, Value::Number(n)) => products::price.ge(*n),
+            (ProductField::Price, Comparator::LessThan,           Value::Number(n)) => products::price.lt(*n),
+            (ProductField::Price, Comparator::LessThanOrEqual,    Value::Number(n)) => products::price.le(*n),
+        )
     }
 
     fn count(filter: Option<&TypedFilter<ProductField>>, conn: &mut PgConnection) -> QueryResult<Option<i64>> {

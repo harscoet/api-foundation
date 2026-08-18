@@ -13,10 +13,12 @@
 ///     )
 /// }
 /// ```
-/// Generate the `apply_restriction` match body for a diesel `DieselField` impl.
+/// Generate the `restriction_expr` match body for a `DieselList` impl.
 ///
-/// Wraps the arms with `Ok(match (...) { ... })`, adds `query.filter(...)` around each
-/// expression, and emits the fallback `_ => Err(QueryBuilderError)` automatically.
+/// Returns `Ok(Box::new($expr))` for each arm — the box coerces to
+/// `Box<dyn BoxableExpression<Table, Pg, SqlType = Bool> + 'static>` via the function's
+/// declared return type. Values must be owned (clone strings, copy numbers with `*n`)
+/// so the expression is `'static`.
 ///
 /// Note: a more compact `[num: gt, ge, ...]` DSL was attempted but Rust does not allow
 /// macros to expand to match arms — `macros cannot expand to match arms` (stable limit).
@@ -24,12 +26,12 @@
 #[allow(unused_macros)]
 macro_rules! diesel_filter {
     (
-        $query:expr, $field:expr, $comparator:expr, $value:expr,
+        $field:expr, $comparator:expr, $value:expr,
         $(($f:pat, $c:pat, $v:pat) => $expr:expr),+ $(,)?
     ) => {
         Ok(match ($field, $comparator, $value) {
             $(
-                ($f, $c, $v) => $query.filter($expr),
+                ($f, $c, $v) => Box::new($expr),
             )+
             _ => return Err(diesel::result::Error::QueryBuilderError(
                 "unsupported filter combination".into(),
