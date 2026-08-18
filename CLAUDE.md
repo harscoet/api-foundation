@@ -38,17 +38,16 @@ The empty stub files `filter.rs`, `order.rs`, `pagination.rs` at the root of `sr
 
 ## `Field` trait
 
-Concrete APIs define an enum of allowed fields and implement a `Field` trait (exact name TBD):
+Concrete APIs define an enum of allowed fields and implement the `Field` trait:
 
 ```rust
 enum ProductField { Name, Type, Price, CreatedAt }
 ```
 
 The trait must support:
-- Mapping `&str → Option<F>` (parsing from the protobuf string)
-- Declaring allowed comparators per field
-- Declaring whether a field is orderable
-- Providing keyset cursor values
+- Mapping `&str → Result<F, _>` via the `FromStr` bound (strum's `EnumString` is the idiomatic derive)
+- Declaring allowed comparators per field (`allowed_comparators` — default `&[]` = non-filterable)
+- Declaring whether a field is orderable (`is_orderable` — default `false`)
 
 ---
 

@@ -103,23 +103,28 @@ pub struct TypedRestriction<F> {
 
 `Sequence` (a field path with no operator) is treated as a validation error for now — the case is ambiguous in AIP-160 and uncommon in standard gRPC APIs.
 
-### Trait `FilterableField`
+### Trait `Field`
+
+`FilterableField` and `OrderableField` are merged into a single `Field` trait:
 
 ```rust
-pub trait FilterableField: Sized {
-    /// Maps a field name string to the enum variant.
-    fn from_field_name(name: &str) -> Option<Self>;
+pub trait Field: Sized + FromStr {
+    /// Comparators allowed when this field appears in a filter expression.
+    /// Default `&[]` makes the field non-filterable: any comparator is rejected.
+    fn allowed_comparators(&self) -> &[aip_160::Comparator] { &[] }
 
-    /// Returns the comparators allowed for this field.
-    fn allowed_comparators(&self) -> &[aip_160::Comparator];
+    /// Whether this field may appear in an `order_by` clause.
+    fn is_orderable(&self) -> bool { false }
 }
 ```
 
+`FromStr` is the bound for field-name parsing — strum's `#[derive(EnumString)]` with `#[strum(serialize_all = "snake_case")]` is the idiomatic implementation.
+
 Validation steps:
 1. Walk the `Expression` tree recursively
-2. For each `Restriction`, call `F::from_field_name(&restriction.field)`
-3. If `None` → `InvalidField` error
-4. Verify the `Comparator` is in `allowed_comparators()` → `InvalidComparator` error if not
+2. For each `Restriction`, call `F::from_str(&restriction.field)`
+3. If `Err` → `Error::UnknownField` error
+4. Verify the `Comparator` is in `allowed_comparators()` → `Error::DisallowedComparator` if not
 5. Produce a `TypedExpression<F>`
 
 ---
@@ -151,15 +156,7 @@ pub struct OrderClause<F> {
 pub enum Direction { Asc, Desc }
 ```
 
-### Trait `OrderableField`
-
-```rust
-pub trait OrderableField: Sized {
-    fn from_field_name(name: &str) -> Option<Self>;
-}
-```
-
-Whether to merge `FilterableField` and `OrderableField` into a single `ApiField` trait is deferred to implementation — merging is simpler if all fields are both filterable and orderable.
+Orderability is checked via `Field::is_orderable()` — unknown field names are rejected through the same `FromStr` bound as the filter.
 
 ### Relationship with keyset pagination
 
@@ -173,15 +170,14 @@ Whether to merge `FilterableField` and `OrderableField` into a single `ApiField`
 
 ```rust
 pub struct PageRequest {
-    pub page_size: u32,        // 0 → API default (e.g. 50), max coerced silently
-    pub page_token: Option<String>,
+    pub page_size: u32,   // 0 → default (50), >1000 → coerced to 1000 silently
 }
 ```
 
 AIP-158 rules:
-- Negative `page_size` → `INVALID_ARGUMENT`
-- `page_size` > max → coerce to max, no error
-- `page_token` is opaque to the client
+- Negative `page_size` → `Error::InvalidPageSize(i32)`
+- `page_size` > 1000 → coerce to 1000, no error
+- `page_token` is managed by `ListQuery`, not `PageRequest`
 
 ### `PageToken` (internal representation)
 
@@ -224,9 +220,10 @@ Construction: deterministic hash (not `std::hash`, which is not stable across pr
 pub struct PageToken(/* opaque */);
 
 impl PageToken {
+    pub fn new(cursor: Vec<CursorEntry>, fingerprint: u64) -> Self { /* ... */ }
     pub fn encode(&self) -> String { /* bitcode + base64 */ }
-    pub fn decode(s: &str) -> Result<Self, PaginationError> { /* base64 + bitcode */ }
-    pub fn verify_request(&self, fingerprint: u64) -> Result<(), PaginationError> { /* ... */ }
+    pub fn decode(s: &str) -> Result<Self> { /* base64 + bitcode */ }
+    pub fn verify_fingerprint(&self, fingerprint: u64) -> Result<()> { /* ... */ }
     pub fn cursor(&self) -> &[CursorEntry] { /* ... */ }
 }
 ```
@@ -237,7 +234,7 @@ impl PageToken {
 pub struct Page<T> {
     pub items: Vec<T>,
     pub next_page_token: Option<String>,  // None means collection exhausted
-    pub total_size: Option<u32>,          // optional, may be an estimate
+    pub total_size: Option<i64>,          // optional; i64 matches diesel's COUNT return type
 }
 ```
 
@@ -251,7 +248,9 @@ pub struct Page<T> {
 pub struct ListQuery<F> {
     pub filter: Option<TypedFilter<F>>,
     pub order_by: Option<OrderBy<F>>,
-    pub page: PageRequest,
+    pub page_size: u32,
+    pub cursor: Option<PageToken>,
+    fingerprint: u64,  // private — access via .fingerprint()
 }
 ```
 
@@ -260,17 +259,17 @@ pub struct ListQuery<F> {
 The concrete API provides the raw strings from the protobuf message. `ListQuery` orchestrates validation:
 
 ```rust
-impl<F: FilterableField + OrderableField> ListQuery<F> {
+impl<F: Field> ListQuery<F> {
     pub fn build(
         filter: Option<&str>,
         order_by: Option<&str>,
         page_size: i32,
         page_token: Option<&str>,
-    ) -> Result<Self, ApiError> { /* ... */ }
+    ) -> Result<Self> { /* ... */ }
+
+    pub fn fingerprint(&self) -> u64 { /* ... */ }
 }
 ```
-
-A `FromListRequest` trait that concrete APIs can implement on their protobuf request type may also be provided.
 
 ### Token/request consistency
 
@@ -278,10 +277,10 @@ Inside `build()`:
 1. Parse and validate `filter` → `TypedFilter<F>`
 2. Parse and validate `order_by` → `OrderBy<F>`
 3. Build `PageRequest`
-4. If `page_token` is present:
+4. Compute FNV-1a fingerprint of `filter_raw + "\0" + order_by_raw`
+5. If `page_token` is present:
    a. Decode the token
-   b. Compute the fingerprint of the current request
-   c. Call `token.verify_request(fingerprint)` → `INVALID_ARGUMENT` on mismatch
+   b. Call `token.verify_fingerprint(fingerprint)` → `Error::PageTokenMismatch` on mismatch
 
 ---
 
@@ -289,21 +288,21 @@ Inside `build()`:
 
 ```rust
 #[derive(thiserror::Error, Debug)]
-pub enum ApiError {
+pub enum Error {
     #[error("invalid filter: {0}")]
     InvalidFilter(String),
 
-    #[error("invalid field: {field}")]
-    InvalidField { field: String },
+    #[error("unknown field: {field:?}")]
+    UnknownField { field: String },
 
-    #[error("invalid comparator '{comparator}' for field '{field}'")]
-    InvalidComparator { field: String, comparator: String },
+    #[error("comparator '{comparator}' is not allowed for field '{field}'")]
+    DisallowedComparator { field: String, comparator: String },
 
     #[error("invalid order_by: {0}")]
     InvalidOrderBy(String),
 
-    #[error("invalid page_size: must be non-negative")]
-    InvalidPageSize,
+    #[error("page_size must be non-negative, got {0}")]
+    InvalidPageSize(i32),
 
     #[error("invalid page_token: {0}")]
     InvalidPageToken(String),
@@ -330,8 +329,8 @@ All of these map to gRPC `INVALID_ARGUMENT`.
 
 | Question | Status |
 |---|---|
-| Merge `FilterableField` + `OrderableField` into `ApiField` | Decide during implementation |
-| Hash algorithm for fingerprint (must be deterministic across processes) | Decide during implementation — FNV-1a or SipHash with fixed key are candidates |
+| Merge `FilterableField` + `OrderableField` into `ApiField` | **Resolved** — single `Field` trait with `FromStr` bound |
+| Hash algorithm for fingerprint (must be deterministic across processes) | **Resolved** — FNV-1a with standard constants |
 | Token expiry (AIP-158 suggests ~3 days) | Out of initial scope; `version` field reserved for future use |
 | `Sequence` handling (field path without operator) | Validation error for now |
 | Wildcard `*` in string values (AIP-160) | Not supported by `aip-160` parser — out of scope |
