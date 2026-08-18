@@ -91,7 +91,7 @@ impl Field for OrderField {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 enum OrderView {
     #[default]
-    Full,    // joins customers → customer_name populated
+    Full, // joins customers → customer_name populated
     Minimal, // orders only — no JOIN, customer_name is None
 }
 
@@ -119,7 +119,9 @@ impl DieselList for Orders {
 
     // Always exclude soft-deleted rows before applying the caller's filter.
     fn base_query<'a>(filter: Option<&TypedFilter<Self::Field>>) -> QueryResult<Self::Query<'a>> {
-        let q = orders::table.filter(orders::deleted_at.is_null()).into_boxed();
+        let q = orders::table
+            .filter(orders::deleted_at.is_null())
+            .into_boxed();
         foundation_diesel::base_query::<Self>(q, filter)
     }
 
@@ -205,16 +207,23 @@ impl DieselList for Orders {
                 .limit(limit)
                 .load::<(i64, String, f64, String, i64)>(conn)?
                 .into_iter()
-                .map(|(id, customer_name, amount, status, created_at)| OrderResponse {
-                    id,
-                    customer_name: Some(customer_name),
-                    amount,
-                    status,
-                    created_at,
-                })
+                .map(
+                    |(id, customer_name, amount, status, created_at)| OrderResponse {
+                        id,
+                        customer_name: Some(customer_name),
+                        amount,
+                        status,
+                        created_at,
+                    },
+                )
                 .collect()),
             OrderView::Minimal => Ok(q
-                .select((orders::id, orders::amount, orders::status, orders::created_at))
+                .select((
+                    orders::id,
+                    orders::amount,
+                    orders::status,
+                    orders::created_at,
+                ))
                 .limit(limit)
                 .load::<(i64, f64, String, i64)>(conn)?
                 .into_iter()
@@ -261,13 +270,10 @@ fn handle_list_orders(
     page_token: &str,
     view: OrderView,
 ) -> Result<Page<OrderResponse>, api_foundation::error::Error> {
-    let query = ListQuery::<OrderField>::build(
-        Some(filter),
-        Some(order_by),
-        page_size,
-        Some(page_token),
-    )?;
-    list_orders(conn, query, view).map_err(|e| api_foundation::error::Error::InvalidFilter(e.to_string()))
+    let query =
+        ListQuery::<OrderField>::build(Some(filter), Some(order_by), page_size, Some(page_token))?;
+    list_orders(conn, query, view)
+        .map_err(|e| api_foundation::error::Error::InvalidFilter(e.to_string()))
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -295,14 +301,16 @@ fn setup(conn: &mut PgConnection) {
     .execute(conn)
     .unwrap();
 
-    diesel::sql_query("DELETE FROM orders").execute(conn).unwrap();
-    diesel::sql_query("DELETE FROM customers").execute(conn).unwrap();
+    diesel::sql_query("DELETE FROM orders")
+        .execute(conn)
+        .unwrap();
+    diesel::sql_query("DELETE FROM customers")
+        .execute(conn)
+        .unwrap();
 
-    diesel::sql_query(
-        "INSERT INTO customers (name) VALUES ('Alice'), ('Bob'), ('Charlie')",
-    )
-    .execute(conn)
-    .unwrap();
+    diesel::sql_query("INSERT INTO customers (name) VALUES ('Alice'), ('Bob'), ('Charlie')")
+        .execute(conn)
+        .unwrap();
 
     // Live orders — 5 rows across 3 customers.
     diesel::sql_query(
@@ -370,7 +378,11 @@ async fn full_view_populates_customer_name() {
 
     let page = handle_list_orders(&mut conn, "", "", 50, "", OrderView::Full).unwrap();
     assert!(page.items.iter().all(|o| o.customer_name.is_some()));
-    let names: Vec<_> = page.items.iter().map(|o| o.customer_name.as_deref().unwrap()).collect();
+    let names: Vec<_> = page
+        .items
+        .iter()
+        .map(|o| o.customer_name.as_deref().unwrap())
+        .collect();
     assert!(names.contains(&"Alice"));
     assert!(names.contains(&"Bob"));
     assert!(names.contains(&"Charlie"));
@@ -396,15 +408,35 @@ async fn pagination_excludes_deleted() {
     assert_eq!(p1.total_size, Some(5));
     assert!(p1.next_page_token.is_some());
 
-    let p2 = handle_list_orders(&mut conn, "", "", 2, p1.next_page_token.as_deref().unwrap(), OrderView::Minimal).unwrap();
+    let p2 = handle_list_orders(
+        &mut conn,
+        "",
+        "",
+        2,
+        p1.next_page_token.as_deref().unwrap(),
+        OrderView::Minimal,
+    )
+    .unwrap();
     assert_eq!(p2.items.len(), 2);
     assert!(p2.next_page_token.is_some());
 
-    let p3 = handle_list_orders(&mut conn, "", "", 2, p2.next_page_token.as_deref().unwrap(), OrderView::Minimal).unwrap();
+    let p3 = handle_list_orders(
+        &mut conn,
+        "",
+        "",
+        2,
+        p2.next_page_token.as_deref().unwrap(),
+        OrderView::Minimal,
+    )
+    .unwrap();
     assert_eq!(p3.items.len(), 1);
     assert!(p3.next_page_token.is_none());
 
-    let all_ids: Vec<i64> = [p1.items, p2.items, p3.items].concat().into_iter().map(|o| o.id).collect();
+    let all_ids: Vec<i64> = [p1.items, p2.items, p3.items]
+        .concat()
+        .into_iter()
+        .map(|o| o.id)
+        .collect();
     assert_eq!(all_ids.len(), 5);
     let unique: std::collections::HashSet<_> = all_ids.iter().collect();
     assert_eq!(unique.len(), 5);
@@ -415,15 +447,32 @@ async fn order_by_created_at_asc() {
     let (mut conn, _c) = pg_conn().await;
     setup(&mut conn);
 
-    let p1 = handle_list_orders(&mut conn, "", "created_at asc", 2, "", OrderView::Minimal).unwrap();
+    let p1 =
+        handle_list_orders(&mut conn, "", "created_at asc", 2, "", OrderView::Minimal).unwrap();
     assert_eq!(p1.items[0].created_at, 1000);
     assert_eq!(p1.items[1].created_at, 2000);
 
-    let p2 = handle_list_orders(&mut conn, "", "created_at asc", 2, p1.next_page_token.as_deref().unwrap(), OrderView::Minimal).unwrap();
+    let p2 = handle_list_orders(
+        &mut conn,
+        "",
+        "created_at asc",
+        2,
+        p1.next_page_token.as_deref().unwrap(),
+        OrderView::Minimal,
+    )
+    .unwrap();
     assert_eq!(p2.items[0].created_at, 3000);
     assert_eq!(p2.items[1].created_at, 4000);
 
-    let p3 = handle_list_orders(&mut conn, "", "created_at asc", 2, p2.next_page_token.as_deref().unwrap(), OrderView::Minimal).unwrap();
+    let p3 = handle_list_orders(
+        &mut conn,
+        "",
+        "created_at asc",
+        2,
+        p2.next_page_token.as_deref().unwrap(),
+        OrderView::Minimal,
+    )
+    .unwrap();
     assert_eq!(p3.items[0].created_at, 5000);
     assert!(p3.next_page_token.is_none());
 }
@@ -433,17 +482,57 @@ async fn token_mismatch_rejected() {
     let (mut conn, _c) = pg_conn().await;
     setup(&mut conn);
 
-    let p1 = handle_list_orders(&mut conn, "amount > 100", "amount asc", 2, "", OrderView::Full).unwrap();
+    let p1 = handle_list_orders(
+        &mut conn,
+        "amount > 100",
+        "amount asc",
+        2,
+        "",
+        OrderView::Full,
+    )
+    .unwrap();
     let token = p1.next_page_token.as_deref().unwrap();
 
     // Different filter → rejected.
-    let err = handle_list_orders(&mut conn, "amount > 200", "amount asc", 2, token, OrderView::Full).unwrap_err();
-    assert!(matches!(err, api_foundation::error::Error::PageTokenMismatch));
+    let err = handle_list_orders(
+        &mut conn,
+        "amount > 200",
+        "amount asc",
+        2,
+        token,
+        OrderView::Full,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        api_foundation::error::Error::PageTokenMismatch
+    ));
 
     // Different order_by → rejected.
-    let err = handle_list_orders(&mut conn, "amount > 100", "amount desc", 2, token, OrderView::Full).unwrap_err();
-    assert!(matches!(err, api_foundation::error::Error::PageTokenMismatch));
+    let err = handle_list_orders(
+        &mut conn,
+        "amount > 100",
+        "amount desc",
+        2,
+        token,
+        OrderView::Full,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        api_foundation::error::Error::PageTokenMismatch
+    ));
 
     // Same parameters → accepted.
-    assert!(handle_list_orders(&mut conn, "amount > 100", "amount asc", 2, token, OrderView::Full).is_ok());
+    assert!(
+        handle_list_orders(
+            &mut conn,
+            "amount > 100",
+            "amount asc",
+            2,
+            token,
+            OrderView::Full
+        )
+        .is_ok()
+    );
 }
