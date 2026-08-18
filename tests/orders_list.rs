@@ -116,9 +116,13 @@ impl DieselList for Orders {
     type View = OrderView;
     type Response = OrderResponse;
     type Query<'a> = orders::BoxedQuery<'a, diesel::pg::Pg>;
+    type Context = ();
 
     // Always exclude soft-deleted rows before applying the caller's filter.
-    fn base_query<'a>(filter: Option<&TypedFilter<Self::Field>>) -> QueryResult<Self::Query<'a>> {
+    fn base_query<'a>(
+        filter: Option<&TypedFilter<Self::Field>>,
+        _ctx: &Self::Context,
+    ) -> QueryResult<Self::Query<'a>> {
         let q = orders::table
             .filter(orders::deleted_at.is_null())
             .into_boxed();
@@ -146,9 +150,12 @@ impl DieselList for Orders {
 
     fn count(
         filter: Option<&TypedFilter<Self::Field>>,
+        ctx: &Self::Context,
         conn: &mut PgConnection,
     ) -> QueryResult<Option<i64>> {
-        Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))
+        Ok(Some(
+            Self::base_query(filter, ctx)?.count().get_result(conn)?,
+        ))
     }
 
     fn apply_tiebreaker_ordering<'a>(q: Self::Query<'a>) -> Self::Query<'a> {
@@ -259,7 +266,7 @@ fn list_orders(
     query: ListQuery<OrderField>,
     view: OrderView,
 ) -> QueryResult<Page<OrderResponse>> {
-    foundation_diesel::diesel_list::<Orders>(conn, query, view)
+    foundation_diesel::diesel_list::<Orders>(conn, query, view, ())
 }
 
 fn handle_list_orders(

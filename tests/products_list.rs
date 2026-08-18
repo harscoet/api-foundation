@@ -138,8 +138,12 @@ impl DieselList for Products {
     type View = ProductView;
     type Response = ProductResponse;
     type Query<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
+    type Context = ();
 
-    fn base_query<'a>(filter: Option<&TypedFilter<Self::Field>>) -> QueryResult<Self::Query<'a>> {
+    fn base_query<'a>(
+        filter: Option<&TypedFilter<Self::Field>>,
+        _ctx: &Self::Context,
+    ) -> QueryResult<Self::Query<'a>> {
         foundation_diesel::base_query::<Self>(products::table.into_boxed(), filter)
     }
 
@@ -159,9 +163,12 @@ impl DieselList for Products {
 
     fn count(
         filter: Option<&TypedFilter<Self::Field>>,
+        ctx: &Self::Context,
         conn: &mut PgConnection,
     ) -> QueryResult<Option<i64>> {
-        Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))
+        Ok(Some(
+            Self::base_query(filter, ctx)?.count().get_result(conn)?,
+        ))
     }
 
     fn apply_tiebreaker_ordering<'a>(q: Self::Query<'a>) -> Self::Query<'a> {
@@ -229,7 +236,7 @@ fn list_products(
     query: ListQuery<ProductField>,
     view: ProductView,
 ) -> QueryResult<Page<ProductResponse>> {
-    foundation_diesel::diesel_list::<Products>(conn, query, view)
+    foundation_diesel::diesel_list::<Products>(conn, query, view, ())
 }
 
 // ── Simulated tonic handler ───────────────────────────────────────────────────

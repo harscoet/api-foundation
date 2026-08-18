@@ -33,6 +33,13 @@ use diesel::sql_types::Bool;
 /// (diesel's blanket impl requires `where Self: Send`, so all implementors are Send and
 /// the auto-trait propagates to the trait object). `And<Box<dyn ...>, Box<dyn ...>>`
 /// is therefore itself boxable, enabling recursive composition.
+///
+/// ## Context
+///
+/// `type Context` carries server-side state (tenant ID, app config, …) that must be
+/// applied to every query but never comes from the client request. Use `()` for entities
+/// that need no extra context. [`diesel_list`] passes `ctx: L::Context` opaquely to
+/// `base_query` and `count`; the impl decides what to do with it.
 pub trait DieselList {
     type Field: Field;
     /// The entity's diesel table type — used to type-check boxed filter predicates.
@@ -41,11 +48,19 @@ pub trait DieselList {
     type Query<'a>;
     type View;
     type Response;
+    /// Server-side context passed to `base_query` and `count`. Use `()` when not needed.
+    type Context;
 
-    /// Build a base query with only the filter applied — no cursor, ordering, or limit.
+    /// Build a base query with filter + context applied — no cursor, ordering, or limit.
+    ///
+    /// `ctx` carries server-side invariants (e.g. tenant filter, soft-delete exclusion)
+    /// that must be enforced regardless of what the client sends.
     ///
     /// Typically: `foundation_diesel::base_query::<Self>(my_table::table.into_boxed(), filter)`
-    fn base_query<'a>(filter: Option<&TypedFilter<Self::Field>>) -> QueryResult<Self::Query<'a>>;
+    fn base_query<'a>(
+        filter: Option<&TypedFilter<Self::Field>>,
+        ctx: &Self::Context,
+    ) -> QueryResult<Self::Query<'a>>;
 
     /// Build a boxed diesel predicate for a single AIP-160 restriction.
     ///
@@ -57,10 +72,11 @@ pub trait DieselList {
         value: &Value,
     ) -> QueryResult<Box<dyn BoxableExpression<Self::Table, Pg, SqlType = Bool> + 'static>>;
 
-    /// Total count with filter only. Return `None` to skip the COUNT query entirely.
-    /// Default: `Ok(None)`. Override with `Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))`.
+    /// Total count with filter + context applied. Return `None` to skip the COUNT query.
+    /// Default: `Ok(None)`. Override with `Ok(Some(Self::base_query(filter, ctx)?.count().get_result(conn)?))`.
     fn count(
         _filter: Option<&TypedFilter<Self::Field>>,
+        _ctx: &Self::Context,
         _conn: &mut PgConnection,
     ) -> QueryResult<Option<i64>> {
         Ok(None)
@@ -253,10 +269,11 @@ pub fn diesel_list<L: DieselList>(
     conn: &mut PgConnection,
     query: ListQuery<L::Field>,
     view: L::View,
+    ctx: L::Context,
 ) -> QueryResult<Page<L::Response>> {
-    let total_size = L::count(query.filter.as_ref(), conn)?;
+    let total_size = L::count(query.filter.as_ref(), &ctx, conn)?;
 
-    let mut q = L::base_query(query.filter.as_ref())?;
+    let mut q = L::base_query(query.filter.as_ref(), &ctx)?;
     if let Some(token) = &query.cursor {
         q = L::apply_cursor(q, token, query.order_by.as_ref());
     }
