@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
 use crate::error::{Error, Result};
 
@@ -49,7 +49,10 @@ pub enum CursorValue {
 
 impl PageToken {
     pub fn new(cursor: Vec<CursorEntry>, fingerprint: u64) -> Self {
-        Self { fingerprint, cursor }
+        Self {
+            fingerprint,
+            cursor,
+        }
     }
 
     pub fn encode(&self) -> String {
@@ -79,8 +82,8 @@ impl PageToken {
             .decode(s)
             .map_err(|e| Error::InvalidPageToken(format!("base64: {e}")))?;
 
-        let raw: RawPageToken = bitcode::decode(&bytes)
-            .map_err(|e| Error::InvalidPageToken(format!("decode: {e}")))?;
+        let raw: RawPageToken =
+            bitcode::decode(&bytes).map_err(|e| Error::InvalidPageToken(format!("decode: {e}")))?;
 
         if raw.version != TOKEN_VERSION {
             return Err(Error::InvalidPageToken(format!(
@@ -171,17 +174,34 @@ mod tests {
     fn all_cursor_value_types() {
         let token = PageToken::new(
             vec![
-                CursorEntry { field_name: "s".to_string(), value: CursorValue::String("x".to_string()) },
-                CursorEntry { field_name: "i".to_string(), value: CursorValue::Int64(-99) },
-                CursorEntry { field_name: "f".to_string(), value: CursorValue::Float64(1.5) },
-                CursorEntry { field_name: "b".to_string(), value: CursorValue::Bool(true) },
-                CursorEntry { field_name: "n".to_string(), value: CursorValue::Null },
+                CursorEntry {
+                    field_name: "s".to_string(),
+                    value: CursorValue::String("x".to_string()),
+                },
+                CursorEntry {
+                    field_name: "i".to_string(),
+                    value: CursorValue::Int64(-99),
+                },
+                CursorEntry {
+                    field_name: "f".to_string(),
+                    value: CursorValue::Float64(1.5),
+                },
+                CursorEntry {
+                    field_name: "b".to_string(),
+                    value: CursorValue::Bool(true),
+                },
+                CursorEntry {
+                    field_name: "n".to_string(),
+                    value: CursorValue::Null,
+                },
             ],
             0,
         );
         let decoded = PageToken::decode(&token.encode()).unwrap();
         assert_eq!(decoded.cursor().len(), 5);
-        assert!(matches!(decoded.cursor()[2].value, CursorValue::Float64(f) if (f - 1.5).abs() < f64::EPSILON));
+        assert!(
+            matches!(decoded.cursor()[2].value, CursorValue::Float64(f) if (f - 1.5).abs() < f64::EPSILON)
+        );
         assert!(matches!(decoded.cursor()[3].value, CursorValue::Bool(true)));
         assert!(matches!(decoded.cursor()[4].value, CursorValue::Null));
     }

@@ -8,8 +8,8 @@
 //! Everything else (parsing, validation, token encoding, consistency checks)
 //! is api-foundation.
 
-use diesel::prelude::*;
 use diesel::pg::PgConnection;
+use diesel::prelude::*;
 use testcontainers_modules::{postgres::Postgres, testcontainers::runners::AsyncRunner};
 
 mod foundation_diesel;
@@ -65,7 +65,7 @@ struct ProductBasic {
 
 #[derive(Debug, Clone)]
 struct ProductResponse {
-    id: i64,           // always returned — resource identifier
+    id: i64, // always returned — resource identifier
     name: Option<String>,
     price: Option<f64>,
 }
@@ -111,8 +111,8 @@ impl Field for ProductField {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 enum ProductView {
     #[default]
-    Full,   // proto value 0 — unspecified, returns all fields
-    Basic,  // proto value 1 — id + name only (no price fetched from DB)
+    Full, // proto value 0 — unspecified, returns all fields
+    Basic, // proto value 1 — id + name only (no price fetched from DB)
 }
 
 impl ProductView {
@@ -157,7 +157,10 @@ impl DieselList for Products {
         )
     }
 
-    fn count(filter: Option<&TypedFilter<Self::Field>>, conn: &mut PgConnection) -> QueryResult<Option<i64>> {
+    fn count(
+        filter: Option<&TypedFilter<Self::Field>>,
+        conn: &mut PgConnection,
+    ) -> QueryResult<Option<i64>> {
         Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))
     }
 
@@ -165,7 +168,11 @@ impl DieselList for Products {
         q.order(products::id.asc())
     }
 
-    fn apply_field_ordering<'a>(q: Self::Query<'a>, field: &Self::Field, direction: &Direction) -> Self::Query<'a> {
+    fn apply_field_ordering<'a>(
+        q: Self::Query<'a>,
+        field: &Self::Field,
+        direction: &Direction,
+    ) -> Self::Query<'a> {
         diesel_order_by!(q, field, direction,
             tiebreaker: products::id,
             ProductField::Name  => products::name,
@@ -177,7 +184,12 @@ impl DieselList for Products {
         q.filter(products::id.gt(foundation_diesel::cursor_i64(cursor, "id")))
     }
 
-    fn apply_field_cursor<'a>(q: Self::Query<'a>, field: &Self::Field, direction: &Direction, cursor: &[CursorEntry]) -> Self::Query<'a> {
+    fn apply_field_cursor<'a>(
+        q: Self::Query<'a>,
+        field: &Self::Field,
+        direction: &Direction,
+        cursor: &[CursorEntry],
+    ) -> Self::Query<'a> {
         diesel_cursor_filter!(q, field, direction, cursor,
             tiebreaker: products::id,
             ProductField::Price => products::price [f64],
@@ -185,7 +197,12 @@ impl DieselList for Products {
         )
     }
 
-    fn load<'a>(q: Self::Query<'a>, view: &Self::View, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<Self::Response>> {
+    fn load<'a>(
+        q: Self::Query<'a>,
+        view: &Self::View,
+        limit: i64,
+        conn: &mut PgConnection,
+    ) -> QueryResult<Vec<Self::Response>> {
         diesel_load!(q, view, limit, conn,
             ProductView::Basic => ProductBasic => |p| ProductResponse { id: p.id, name: Some(p.name), price: None },
             ProductView::Full  => Product      => |p| ProductResponse { id: p.id, name: Some(p.name), price: Some(p.price) },
@@ -200,7 +217,10 @@ impl DieselList for Products {
     }
 
     fn tiebreaker(item: &Self::Response) -> CursorEntry {
-        CursorEntry { field_name: "id".to_string(), value: CursorValue::Int64(item.id) }
+        CursorEntry {
+            field_name: "id".to_string(),
+            value: CursorValue::Int64(item.id),
+        }
     }
 }
 
@@ -308,11 +328,27 @@ async fn pagination_by_id() {
     assert_eq!(p1.items.len(), 2);
     assert!(p1.next_page_token.is_some());
 
-    let p2 = handle_list_products(&mut conn, "", "", 2, p1.next_page_token.as_deref().unwrap(), 0).unwrap();
+    let p2 = handle_list_products(
+        &mut conn,
+        "",
+        "",
+        2,
+        p1.next_page_token.as_deref().unwrap(),
+        0,
+    )
+    .unwrap();
     assert_eq!(p2.items.len(), 2);
     assert!(p2.next_page_token.is_some());
 
-    let p3 = handle_list_products(&mut conn, "", "", 2, p2.next_page_token.as_deref().unwrap(), 0).unwrap();
+    let p3 = handle_list_products(
+        &mut conn,
+        "",
+        "",
+        2,
+        p2.next_page_token.as_deref().unwrap(),
+        0,
+    )
+    .unwrap();
     assert_eq!(p3.items.len(), 1);
     assert!(p3.next_page_token.is_none());
 
@@ -352,7 +388,15 @@ async fn filter_combined_with_pagination() {
     assert_eq!(p1.total_size, Some(4));
     assert!(p1.next_page_token.is_some());
 
-    let p2 = handle_list_products(&mut conn, "price > 10", "", 2, p1.next_page_token.as_deref().unwrap(), 0).unwrap();
+    let p2 = handle_list_products(
+        &mut conn,
+        "price > 10",
+        "",
+        2,
+        p1.next_page_token.as_deref().unwrap(),
+        0,
+    )
+    .unwrap();
     assert_eq!(p2.items.len(), 2);
     assert_eq!(p2.total_size, Some(4));
     assert!(p2.next_page_token.is_none());
@@ -367,11 +411,27 @@ async fn pagination_with_ordering_desc() {
     assert_eq!(p1.items[0].price, Some(50.0));
     assert_eq!(p1.items[1].price, Some(40.0));
 
-    let p2 = handle_list_products(&mut conn, "", "price desc", 2, p1.next_page_token.as_deref().unwrap(), 0).unwrap();
+    let p2 = handle_list_products(
+        &mut conn,
+        "",
+        "price desc",
+        2,
+        p1.next_page_token.as_deref().unwrap(),
+        0,
+    )
+    .unwrap();
     assert_eq!(p2.items[0].price, Some(30.0));
     assert_eq!(p2.items[1].price, Some(20.0));
 
-    let p3 = handle_list_products(&mut conn, "", "price desc", 2, p2.next_page_token.as_deref().unwrap(), 0).unwrap();
+    let p3 = handle_list_products(
+        &mut conn,
+        "",
+        "price desc",
+        2,
+        p2.next_page_token.as_deref().unwrap(),
+        0,
+    )
+    .unwrap();
     assert_eq!(p3.items[0].price, Some(10.0));
     assert!(p3.next_page_token.is_none());
 }
@@ -385,10 +445,16 @@ async fn token_mismatch_is_rejected() {
     let token = p1.next_page_token.as_deref().unwrap();
 
     let err = handle_list_products(&mut conn, "price > 20", "price asc", 2, token, 0).unwrap_err();
-    assert!(matches!(err, api_foundation::error::Error::PageTokenMismatch));
+    assert!(matches!(
+        err,
+        api_foundation::error::Error::PageTokenMismatch
+    ));
 
     let err = handle_list_products(&mut conn, "price > 10", "price desc", 2, token, 0).unwrap_err();
-    assert!(matches!(err, api_foundation::error::Error::PageTokenMismatch));
+    assert!(matches!(
+        err,
+        api_foundation::error::Error::PageTokenMismatch
+    ));
 
     // Same parameters — accepted
     assert!(handle_list_products(&mut conn, "price > 10", "price asc", 2, token, 0).is_ok());
@@ -428,7 +494,11 @@ async fn full_view_loads_all_fields() {
 
     // view=0 (unspecified) → Full — both name and price are loaded from DB
     let page = handle_list_products(&mut conn, "", "", 10, "", 0).unwrap();
-    assert!(page.items.iter().all(|p| p.name.is_some() && p.price.is_some()));
+    assert!(
+        page.items
+            .iter()
+            .all(|p| p.name.is_some() && p.price.is_some())
+    );
 }
 
 #[tokio::test]
@@ -457,7 +527,15 @@ async fn basic_view_with_filter_and_pagination() {
     assert!(p1.next_page_token.is_some());
 
     // Pagination token works: same view, same filter
-    let p2 = handle_list_products(&mut conn, "price > 10", "", 2, p1.next_page_token.as_deref().unwrap(), 1).unwrap();
+    let p2 = handle_list_products(
+        &mut conn,
+        "price > 10",
+        "",
+        2,
+        p1.next_page_token.as_deref().unwrap(),
+        1,
+    )
+    .unwrap();
     assert_eq!(p2.items.len(), 2);
     assert!(p2.next_page_token.is_none());
 

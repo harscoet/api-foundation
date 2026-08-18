@@ -31,8 +31,7 @@ pub struct TypedRestriction<F> {
 impl<F: Field> TypedFilter<F> {
     pub fn parse(input: &str) -> Result<Self> {
         let raw = input.to_string();
-        let ast = aip_160::parse_filter(input)
-            .map_err(|e| Error::InvalidFilter(e.to_string()))?;
+        let ast = aip_160::parse_filter(input).map_err(|e| Error::InvalidFilter(e.to_string()))?;
         validate::from_ast(ast, raw)
     }
 

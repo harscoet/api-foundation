@@ -11,12 +11,11 @@ use api_foundation::{
     order_by::{Direction, OrderBy},
     pagination::{CursorEntry, CursorValue, Page, PageToken},
 };
+use diesel::QueryResult;
 use diesel::expression::BoxableExpression;
-use diesel::pg::Pg;
-use diesel::pg::PgConnection;
+use diesel::pg::{Pg, PgConnection};
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::sql_types::Bool;
-use diesel::QueryResult;
 
 /// Contract for a diesel-backed list repository.
 ///
@@ -78,7 +77,10 @@ pub trait DieselList {
     ) -> Self::Query<'a>;
 
     /// Apply ORDER BY — dispatches to [`apply_tiebreaker_ordering`] or [`apply_field_ordering`].
-    fn apply_ordering<'a>(query: Self::Query<'a>, order_by: Option<&OrderBy<Self::Field>>) -> Self::Query<'a> {
+    fn apply_ordering<'a>(
+        query: Self::Query<'a>,
+        order_by: Option<&OrderBy<Self::Field>>,
+    ) -> Self::Query<'a> {
         match order_by.and_then(|o| o.clauses.first()) {
             None => Self::apply_tiebreaker_ordering(query),
             Some(clause) => Self::apply_field_ordering(query, &clause.field, &clause.direction),
@@ -86,7 +88,10 @@ pub trait DieselList {
     }
 
     /// Keyset filter when there is no explicit ordering — typically `tiebreaker_col > cursor_id`.
-    fn apply_tiebreaker_cursor<'a>(query: Self::Query<'a>, cursor: &[CursorEntry]) -> Self::Query<'a>;
+    fn apply_tiebreaker_cursor<'a>(
+        query: Self::Query<'a>,
+        cursor: &[CursorEntry],
+    ) -> Self::Query<'a>;
 
     /// Keyset filter for a specific sort field + direction + tiebreaker.
     fn apply_field_cursor<'a>(
@@ -106,7 +111,9 @@ pub trait DieselList {
         let cursor = token.cursor();
         match order_by.and_then(|ob| ob.clauses.first()) {
             None => Self::apply_tiebreaker_cursor(query, cursor),
-            Some(clause) => Self::apply_field_cursor(query, &clause.field, &clause.direction, cursor),
+            Some(clause) => {
+                Self::apply_field_cursor(query, &clause.field, &clause.direction, cursor)
+            }
         }
     }
 
@@ -126,7 +133,10 @@ pub trait DieselList {
     fn tiebreaker(item: &Self::Response) -> CursorEntry;
 
     /// Build a keyset cursor from the last item in a page.
-    fn build_cursor(item: &Self::Response, order_by: Option<&OrderBy<Self::Field>>) -> Vec<CursorEntry> {
+    fn build_cursor(
+        item: &Self::Response,
+        order_by: Option<&OrderBy<Self::Field>>,
+    ) -> Vec<CursorEntry> {
         let mut cursor: Vec<CursorEntry> = order_by
             .iter()
             .flat_map(|ob| &ob.clauses)
@@ -163,9 +173,7 @@ fn build_predicate<L: DieselList>(
             let inner = build_predicate::<L>(e)?;
             Ok(Box::new(diesel::dsl::not(inner)))
         }
-        TypedExpression::Restriction(r) => {
-            L::restriction_expr(&r.field, &r.comparator, &r.value)
-        }
+        TypedExpression::Restriction(r) => L::restriction_expr(&r.field, &r.comparator, &r.value),
     }
 }
 
@@ -176,9 +184,9 @@ pub fn apply_filter<'a, L: DieselList>(
 ) -> QueryResult<L::Query<'a>>
 where
     L::Query<'a>: FilterDsl<
-        Box<dyn BoxableExpression<L::Table, Pg, SqlType = Bool> + 'static>,
-        Output = L::Query<'a>,
-    >,
+            Box<dyn BoxableExpression<L::Table, Pg, SqlType = Bool> + 'static>,
+            Output = L::Query<'a>,
+        >,
 {
     Ok(query.filter(build_predicate::<L>(expr)?))
 }
@@ -194,9 +202,9 @@ pub fn base_query<'a, L: DieselList>(
 ) -> QueryResult<L::Query<'a>>
 where
     L::Query<'a>: FilterDsl<
-        Box<dyn BoxableExpression<L::Table, Pg, SqlType = Bool> + 'static>,
-        Output = L::Query<'a>,
-    >,
+            Box<dyn BoxableExpression<L::Table, Pg, SqlType = Bool> + 'static>,
+            Output = L::Query<'a>,
+        >,
 {
     match filter {
         Some(f) => apply_filter::<L>(table_query, &f.expression),
@@ -209,7 +217,10 @@ pub fn cursor_i64(cursor: &[CursorEntry], field_name: &str) -> i64 {
     cursor
         .iter()
         .find(|e| e.field_name == field_name)
-        .and_then(|e| if let CursorValue::Int64(n) = e.value { Some(n) } else { None })
+        .and_then(|e| match e.value {
+            CursorValue::Int64(n) => Some(n),
+            _ => None,
+        })
         .unwrap_or(0)
 }
 
@@ -218,7 +229,10 @@ pub fn cursor_f64(cursor: &[CursorEntry], field_name: &str) -> f64 {
     cursor
         .iter()
         .find(|e| e.field_name == field_name)
-        .and_then(|e| if let CursorValue::Float64(f) = e.value { Some(f) } else { None })
+        .and_then(|e| match e.value {
+            CursorValue::Float64(f) => Some(f),
+            _ => None,
+        })
         .unwrap_or(f64::MIN)
 }
 
@@ -227,7 +241,10 @@ pub fn cursor_string(cursor: &[CursorEntry], field_name: &str) -> String {
     cursor
         .iter()
         .find(|e| e.field_name == field_name)
-        .and_then(|e| if let CursorValue::String(s) = &e.value { Some(s.clone()) } else { None })
+        .and_then(|e| match &e.value {
+            CursorValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
         .unwrap_or_default()
 }
 
@@ -240,7 +257,7 @@ pub fn diesel_list<L: DieselList>(
     let total_size = L::count(query.filter.as_ref(), conn)?;
 
     let mut q = L::base_query(query.filter.as_ref())?;
-    if let Some(ref token) = query.cursor {
+    if let Some(token) = &query.cursor {
         q = L::apply_cursor(q, token, query.order_by.as_ref());
     }
     q = L::apply_ordering(q, query.order_by.as_ref());
@@ -261,5 +278,9 @@ pub fn diesel_list<L: DieselList>(
         .encode()
     });
 
-    Ok(Page { items, next_page_token, total_size })
+    Ok(Page {
+        items,
+        next_page_token,
+        total_size,
+    })
 }

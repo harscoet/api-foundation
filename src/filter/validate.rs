@@ -24,9 +24,13 @@ fn expression<F: Field>(expr: Expression) -> Result<TypedExpression<F>> {
         )),
         Expression::Not(e) => Ok(TypedExpression::Not(Box::new(expression(*e)?))),
         Expression::Restriction(r) => {
-            let field = r.field.parse::<F>().ok().ok_or_else(|| Error::UnknownField {
-                field: r.field.clone(),
-            })?;
+            let field = r
+                .field
+                .parse::<F>()
+                .ok()
+                .ok_or_else(|| Error::UnknownField {
+                    field: r.field.clone(),
+                })?;
             if !field.allowed_comparators().contains(&r.comparator) {
                 return Err(Error::DisallowedComparator {
                     field: r.field,

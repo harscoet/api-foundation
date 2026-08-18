@@ -1,5 +1,5 @@
-mod validate;
 pub mod typed;
+mod validate;
 
 pub use aip_160::{Comparator, Value};
 pub use typed::{TypedExpression, TypedFilter, TypedRestriction};
@@ -32,7 +32,6 @@ mod tests {
     }
 
     impl Field for F {
-
         fn allowed_comparators(&self) -> &[Comparator] {
             match self {
                 F::Name => &[Comparator::Equal, Comparator::NotEqual, Comparator::Has],

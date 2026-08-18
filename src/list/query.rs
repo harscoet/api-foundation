@@ -114,7 +114,6 @@ mod tests {
     }
 
     impl FieldTrait for Field {
-
         fn allowed_comparators(&self) -> &[Comparator] {
             match self {
                 Field::Name => &[Comparator::Equal, Comparator::Has],
@@ -171,7 +170,13 @@ mod tests {
         );
         let encoded = token.encode();
 
-        let q2 = build(Some(r#"name = "foo""#), Some("price desc"), 10, Some(&encoded)).unwrap();
+        let q2 = build(
+            Some(r#"name = "foo""#),
+            Some("price desc"),
+            10,
+            Some(&encoded),
+        )
+        .unwrap();
         assert!(q2.cursor.is_some());
     }
 
@@ -182,8 +187,13 @@ mod tests {
         let encoded = token.encode();
 
         // same order_by but different filter
-        let err = build(Some(r#"name = "bar""#), Some("price desc"), 10, Some(&encoded))
-            .unwrap_err();
+        let err = build(
+            Some(r#"name = "bar""#),
+            Some("price desc"),
+            10,
+            Some(&encoded),
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::PageTokenMismatch));
     }
 

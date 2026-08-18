@@ -1,4 +1,7 @@
-use crate::{error::{Error, Result}, field::Field};
+use crate::{
+    error::{Error, Result},
+    field::Field,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Direction {
@@ -29,9 +32,7 @@ impl<F: Field> OrderBy<F> {
         for part in input.split(',') {
             let part = part.trim();
             if part.is_empty() {
-                return Err(Error::InvalidOrderBy(format!(
-                    "empty clause in: {input:?}"
-                )));
+                return Err(Error::InvalidOrderBy(format!("empty clause in: {input:?}")));
             }
 
             let (field_name, direction) = if let Some(pos) = part.rfind(' ') {
@@ -46,9 +47,12 @@ impl<F: Field> OrderBy<F> {
                 (part, Direction::Asc)
             };
 
-            let field = field_name.parse::<F>().ok().ok_or_else(|| Error::UnknownField {
-                field: field_name.to_string(),
-            })?;
+            let field = field_name
+                .parse::<F>()
+                .ok()
+                .ok_or_else(|| Error::UnknownField {
+                    field: field_name.to_string(),
+                })?;
 
             if !field.is_orderable() {
                 return Err(Error::InvalidOrderBy(format!(
@@ -104,7 +108,6 @@ mod tests {
     }
 
     impl Field for F {
-
         fn allowed_comparators(&self) -> &[Comparator] {
             match self {
                 F::Description => &[Comparator::Has],
