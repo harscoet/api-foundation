@@ -43,11 +43,10 @@ pub trait DieselList {
     type View;
     type Response;
 
-    /// Table initialization + filter application.
+    /// Build a base query with only the filter applied — no cursor, ordering, or limit.
+    ///
     /// Typically: `foundation_diesel::base_query::<Self>(my_table::table.into_boxed(), filter)`
-    fn base_query<'a>(
-        filter: Option<&TypedFilter<Self::Field>>,
-    ) -> QueryResult<Self::Query<'a>>;
+    fn base_query<'a>(filter: Option<&TypedFilter<Self::Field>>) -> QueryResult<Self::Query<'a>>;
 
     /// Build a boxed diesel predicate for a single AIP-160 restriction.
     ///

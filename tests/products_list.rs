@@ -137,8 +137,7 @@ impl DieselList for Products {
     type Query<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 
     fn base_query<'a>(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<Self::Query<'a>> {
-        let q: products::BoxedQuery<'a, diesel::pg::Pg> = products::table.into_boxed();
-        foundation_diesel::base_query::<Products>(q, filter)
+        foundation_diesel::base_query::<Self>(products::table.into_boxed(), filter)
     }
 
     fn restriction_expr(
