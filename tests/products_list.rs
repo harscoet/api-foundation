@@ -23,6 +23,9 @@ use api_foundation::{
     order_by::Direction,
     pagination::{CursorEntry, CursorValue, Page},
 };
+use diesel::expression::BoxableExpression;
+use diesel::pg::Pg;
+use diesel::sql_types::Bool;
 use foundation_diesel::DieselList;
 
 // ── Diesel schema ─────────────────────────────────────────────────────────────
@@ -136,15 +139,15 @@ impl DieselList for Products {
     type Response = ProductResponse;
     type Query<'a> = products::BoxedQuery<'a, diesel::pg::Pg>;
 
-    fn base_query<'a>(filter: Option<&TypedFilter<ProductField>>) -> QueryResult<Self::Query<'a>> {
+    fn base_query<'a>(filter: Option<&TypedFilter<Self::Field>>) -> QueryResult<Self::Query<'a>> {
         foundation_diesel::base_query::<Self>(products::table.into_boxed(), filter)
     }
 
     fn restriction_expr(
-        field: &ProductField,
+        field: &Self::Field,
         comparator: &Comparator,
         value: &Value,
-    ) -> diesel::QueryResult<Box<dyn diesel::expression::BoxableExpression<products::table, diesel::pg::Pg, SqlType = diesel::sql_types::Bool> + 'static>> {
+    ) -> QueryResult<Box<dyn BoxableExpression<Self::Table, Pg, SqlType = Bool> + 'static>> {
         diesel_filter!(field, comparator, value,
             (ProductField::Name,  Comparator::Equal,              Value::String(s)) => products::name.eq(s.clone()),
             (ProductField::Price, Comparator::GreaterThan,        Value::Number(n)) => products::price.gt(*n),
@@ -154,7 +157,7 @@ impl DieselList for Products {
         )
     }
 
-    fn count(filter: Option<&TypedFilter<ProductField>>, conn: &mut PgConnection) -> QueryResult<Option<i64>> {
+    fn count(filter: Option<&TypedFilter<Self::Field>>, conn: &mut PgConnection) -> QueryResult<Option<i64>> {
         Ok(Some(Self::base_query(filter)?.count().get_result(conn)?))
     }
 
@@ -162,7 +165,7 @@ impl DieselList for Products {
         q.order(products::id.asc())
     }
 
-    fn apply_field_ordering<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction) -> Self::Query<'a> {
+    fn apply_field_ordering<'a>(q: Self::Query<'a>, field: &Self::Field, direction: &Direction) -> Self::Query<'a> {
         diesel_order_by!(q, field, direction,
             tiebreaker: products::id,
             ProductField::Name  => products::name,
@@ -174,7 +177,7 @@ impl DieselList for Products {
         q.filter(products::id.gt(foundation_diesel::cursor_i64(cursor, "id")))
     }
 
-    fn apply_field_cursor<'a>(q: Self::Query<'a>, field: &ProductField, direction: &Direction, cursor: &[CursorEntry]) -> Self::Query<'a> {
+    fn apply_field_cursor<'a>(q: Self::Query<'a>, field: &Self::Field, direction: &Direction, cursor: &[CursorEntry]) -> Self::Query<'a> {
         diesel_cursor_filter!(q, field, direction, cursor,
             tiebreaker: products::id,
             ProductField::Price => products::price [f64],
@@ -182,21 +185,21 @@ impl DieselList for Products {
         )
     }
 
-    fn load<'a>(q: Self::Query<'a>, view: &ProductView, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<ProductResponse>> {
+    fn load<'a>(q: Self::Query<'a>, view: &Self::View, limit: i64, conn: &mut PgConnection) -> QueryResult<Vec<Self::Response>> {
         diesel_load!(q, view, limit, conn,
             ProductView::Basic => ProductBasic => |p| ProductResponse { id: p.id, name: Some(p.name), price: None },
             ProductView::Full  => Product      => |p| ProductResponse { id: p.id, name: Some(p.name), price: Some(p.price) },
         )
     }
 
-    fn field_cursor_value(field: &ProductField, item: &ProductResponse) -> Option<CursorEntry> {
+    fn field_cursor_value(field: &Self::Field, item: &Self::Response) -> Option<CursorEntry> {
         diesel_cursor_value!(field,
             ProductField::Name  => [str] item.name,
             ProductField::Price => [f64] item.price,
         )
     }
 
-    fn tiebreaker(item: &ProductResponse) -> CursorEntry {
+    fn tiebreaker(item: &Self::Response) -> CursorEntry {
         CursorEntry { field_name: "id".to_string(), value: CursorValue::Int64(item.id) }
     }
 }

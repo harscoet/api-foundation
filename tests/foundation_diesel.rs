@@ -78,13 +78,7 @@ pub trait DieselList {
     ) -> Self::Query<'a>;
 
     /// Apply ORDER BY — dispatches to [`apply_tiebreaker_ordering`] or [`apply_field_ordering`].
-    fn apply_ordering<'a, 'b>(
-        query: Self::Query<'a>,
-        order_by: Option<&'b OrderBy<Self::Field>>,
-    ) -> Self::Query<'a>
-    where
-        Self: 'a,
-    {
+    fn apply_ordering<'a>(query: Self::Query<'a>, order_by: Option<&OrderBy<Self::Field>>) -> Self::Query<'a> {
         match order_by.and_then(|o| o.clauses.first()) {
             None => Self::apply_tiebreaker_ordering(query),
             Some(clause) => Self::apply_field_ordering(query, &clause.field, &clause.direction),
@@ -104,14 +98,11 @@ pub trait DieselList {
 
     /// Apply the full keyset cursor — dispatches to [`apply_tiebreaker_cursor`] or
     /// [`apply_field_cursor`] based on whether ordering is active.
-    fn apply_cursor<'a, 'b>(
+    fn apply_cursor<'a>(
         query: Self::Query<'a>,
-        token: &'b PageToken,
-        order_by: Option<&'b OrderBy<Self::Field>>,
-    ) -> Self::Query<'a>
-    where
-        Self: 'a,
-    {
+        token: &PageToken,
+        order_by: Option<&OrderBy<Self::Field>>,
+    ) -> Self::Query<'a> {
         let cursor = token.cursor();
         match order_by.and_then(|ob| ob.clauses.first()) {
             None => Self::apply_tiebreaker_cursor(query, cursor),
